@@ -1,0 +1,10 @@
+/build/
+*.zip
+*.exe
+*.dll
+__pycache__/
+*.py[cod]
+/screenshots/
+/settings.ini
+/savegame.dat
+.vs/

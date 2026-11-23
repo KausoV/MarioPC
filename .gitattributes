@@ -1,0 +1,21 @@
+* text=auto
+*.c text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.bmp binary
+*.exe binary
+*.dll binary
+*.dat binary
+*.mario-save binary
+*.gif binary
+*.jpg binary
+*.jpeg binary
+*.mp4 binary
+*.ppm binary
+*.rgb binary
+*.ram binary
+*.native binary
+*.history binary
+*.bin binary
