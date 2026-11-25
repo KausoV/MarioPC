@@ -53,6 +53,8 @@ void persistence(const std::filesystem::path& directory) {
     original.scaling = 1;
     original.filter = 1;
     original.vsync = true;
+    original.no_timer = true;
+    original.smart_enemies = true;
     original.deadzone = 47;
     original.stick = false;
     original.gamepad_guid = "abcdef0123456789abcdef0123456789";
@@ -65,6 +67,7 @@ void persistence(const std::filesystem::path& directory) {
     require(loaded.monitor == original.monitor && loaded.monitor_name == original.monitor_name, "Monitor persistence and escaping");
     require(loaded.screen_mode == 2 && loaded.width == 1920 && loaded.height == 1080 && std::fabs(loaded.refresh_rate - 59.94f) < .0001f, "Video mode persistence");
     require(loaded.scaling == 1 && loaded.filter == 1 && loaded.vsync && loaded.deadzone == 47 && !loaded.stick, "Graphics/control persistence");
+    require(loaded.no_timer && loaded.smart_enemies, "Gameplay rule choices persist through a settings roundtrip");
     require(loaded.gamepad_guid == original.gamepad_guid, "Preferred gamepad GUID persistence");
     for (int i = 0; i < mario::ActionCount; ++i) require(sameBinding(loaded.bindings[i], original.bindings[i]), "Binding roundtrip " + std::to_string(i));
     original.width = 1024;
@@ -74,11 +77,12 @@ void persistence(const std::filesystem::path& directory) {
         require(item.path().filename() == config.filename(), "No abandoned temporary files");
     const auto missing = mario::loadSettings(directory / "missing.ini", message);
     require(message.empty() && missing.width == 1280 && missing.height == 720 && missing.scaling == 2, "Missing settings use widescreen defaults");
+    require(!missing.no_timer && !missing.smart_enemies, "Legacy and missing settings retain timed standard gameplay by default");
     {
         std::ofstream corrupt(config, std::ios::binary | std::ios::trunc);
         corrupt << "\xEF\xBB\xBF[mario_pc]\nversion=1\nwidth=-4\nheight=9999999999999\nmonitor=-1\n"
                 << "screen_mode=banana\nrefresh_rate=nan\nfilter=9\ndeadzone=105\nvsync=abc\n"
-                << "gamepad_guid=bad\nunknown_future_field=anything\n[bindings]\n"
+                << "no_timer=banana\nsmart_enemies=3\ngamepad_guid=bad\nunknown_future_field=anything\n[bindings]\n"
                 << "jump=" << SDL_SCANCODE_ESCAPE << ",29,0\n"
                 << "start=" << SDL_SCANCODE_F1 << ",0,6\n"
                 << "run=27,225,99999\nleft=80,4junk,13\nselect=43,229," << SDL_GAMEPAD_BUTTON_START << "\n";
@@ -87,6 +91,7 @@ void persistence(const std::filesystem::path& directory) {
     require(!message.empty(), "Corrupt settings produce diagnostic");
     const auto defaults = mario::defaultSettings();
     require(loaded.width == 1280 && loaded.height == 720 && loaded.screen_mode == 0 && loaded.monitor == 0, "Unsafe video values fall back");
+    require(!loaded.no_timer && !loaded.smart_enemies, "Invalid gameplay flags fall back to timed standard play");
     require(loaded.filter == 0 && loaded.refresh_rate == 0 && loaded.deadzone == 30 && !loaded.vsync && loaded.gamepad_guid.empty(), "Unsafe options fall back");
     for (const auto action : {mario::Action::Jump, mario::Action::Start, mario::Action::Run, mario::Action::Left, mario::Action::Select}) {
         const int i = static_cast<int>(action);
@@ -97,6 +102,14 @@ void persistence(const std::filesystem::path& directory) {
         future << "[mario_pc]\nversion=1\nwidth=1280\nfuture_key=ignore\n[future]\ninvalid line accepted here\n";
     }
     require(mario::loadSettings(config, message).width == 1280 && message.empty(), "Unknown fields/sections ignored");
+    loaded = mario::loadSettings(config, message);
+    require(!loaded.no_timer && !loaded.smart_enemies, "Older settings without gameplay fields load safely");
+    auto changedRules = defaults; changedRules.no_timer = true; changedRules.smart_enemies = true;
+    require(mario::saveSettings(config, changedRules, message), "Save enabled optional gameplay rules");
+    changedRules.no_timer = false; changedRules.smart_enemies = false;
+    require(mario::saveSettings(config, changedRules, message), "Disable and replace both gameplay rules");
+    loaded = mario::loadSettings(config,message);
+    require(!loaded.no_timer && !loaded.smart_enemies, "Both optional gameplay rules persist when disabled again");
     auto invalid = defaults;
     invalid.bindings[0] = {SDL_SCANCODE_F12, static_cast<SDL_Scancode>(99999), 9999};
     invalid.bindings[1] = {SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN, -1};

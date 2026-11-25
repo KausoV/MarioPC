@@ -92,10 +92,19 @@ int SMB_viewport_camera_x(const struct SMB_state *state);
 // including OAM and player animation flags). A legacy import uses native inputs
 // until its first tick; its saved presentation image remains authoritative.
 const u8 *SMB_presentation_ram(const struct SMB_state *state);
+bool SMB_viewport_block_bumped(const struct SMB_state *state, unsigned column, unsigned row);
 bool SMB_viewport_cell(const struct SMB_state *state, unsigned column, unsigned row,
                        u8 tiles[4], u8 *palette, u8 *collision);
 // Redraw the latched visual frame without advancing gameplay or changing native RAM.
 void SMB_redraw(struct SMB_state *state);
+// Optional PC gameplay preferences. Both default to false and survive imports;
+// settings belong to the frontend, not to the native v1 save-state format.
+void SMB_set_no_timer(struct SMB_state *state, bool enabled);
+bool SMB_no_timer(const struct SMB_state *state);
+void SMB_set_immortal(struct SMB_state *state, bool enabled);
+bool SMB_immortal(const struct SMB_state *state);
+void SMB_set_smart_enemies(struct SMB_state *state, bool enabled);
+bool SMB_smart_enemies(const struct SMB_state *state);
 void SMB_tick(struct SMB_state *state);
 u8 *SMB_ram(struct SMB_state *state);
 u8 *SMB_ppuram(struct SMB_state *state);

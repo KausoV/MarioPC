@@ -6,7 +6,7 @@
 
 namespace mario {
 
-enum class MenuAction { None, StartGame, SaveGame, LoadGame, ReturnToTitle, QuitDesktop };
+enum class MenuAction { None, StartGame, SaveGame, LoadGame, EnableImmortality, ReturnToTitle, QuitDesktop };
 
 class SettingsMenu {
 public:
@@ -20,10 +20,15 @@ public:
     bool visible() const;
     bool capturing() const;
     bool handleEvent(const SDL_Event& event);
+    // Closed ready-title controls are owned by its three visible choices only.
+    void filterTitleControls(SMB_buttons& buttons);
+    bool takeTitleActivity(); // A real navigation/activation edge keeps the ready title awake.
+    int takeTitlePlayers(); // 0/1 on a title StartGame choice, otherwise -1.
     bool render(); // Legacy quit signal; game actions are delivered by takeAction().
     MenuAction takeAction();
     void setSaveAvailable(bool available);
     void setGameRunning(bool running);
+    void setImmortal(bool active);
     void setPresentationHud(const PresentationHud& data, const SDL_FRect& renderDest);
     void setBackdropPixels(const unsigned char* rgb, int width, int height, const SDL_FRect& renderDest, std::uint64_t frame);
     void notifyGameAction(bool success, const std::string& message);

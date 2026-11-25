@@ -10,8 +10,8 @@ extern "C" {
 #include "pc_settings.h"
 #include "settings_menu.h"
 #include "game_save.h"
-#include "character_art.h"
-#include "world_assets.h"
+#include "iskra_presentation.h"
+#include "iskra_audio.h"
 #include "frame_clock.h"
 #include <cstdint>
 #include <vector>
@@ -52,16 +52,17 @@ struct TimingSamples {
 struct Game {
     SMB_state* state = nullptr;
     SMBraster* raster = nullptr;
-    SMB_audio* audio = nullptr;
+    iskra::ForestAudio audio;
     std::array<unsigned char, W*H*3> pixels{};
-    mario::CharacterRenderer presentation;
+    iskra::Presentation presentation;
     std::uint64_t presentationRevision = 0;
-    unsigned playerSpriteStart = 1;
-    bool visualLuigi = false, visualFire = false;
-    mario::WorldScene visualScene{0,0,1,false,false};
-    int visualScroll = 0;
     unsigned backwardScrollFrames = 0, maxCameraX = 0, maxPlayerX = 0;
     SMB_buttons buttons{};
+    bool noTimer = false, smartEnemies = false;
+    void setGameplayOptions(bool noTimerEnabled, bool smartEnemiesEnabled) {
+        noTimer=noTimerEnabled; smartEnemies=smartEnemiesEnabled;
+        if(state) { SMB_set_no_timer(state,noTimer); SMB_set_smart_enemies(state,smartEnemies); }
+    }
     size_t asset_offset = 0;
     unsigned long long apu_writes = 0;
     unsigned long long tile_draws = 0;
@@ -98,6 +99,9 @@ struct Game {
         auto u32 = [&](size_t p) { std::uint32_t v=0; for (unsigned i=0;i<4;++i) v |= std::uint32_t(extra[p+i])<<(i*8); return v; };
         return 64 + size_t(u32(56))*u32(60)*3;
     }
+    // Stored screenshots are valid only for the artwork which produced them.
+    // Older saves keep the simulation and redraw their visual frame on load.
+    static constexpr char PresentationTag[] = "ISKVS005";
     std::vector<unsigned char> snapshotExtra() const {
         const size_t imageEnd = 64 + presentation.frameBytes();
         const size_t historyBytes = SMB_backtracking_size(state);
@@ -106,10 +110,11 @@ struct Game {
         for (int i = 0; i < 8; ++i) out[8+i] = static_cast<unsigned char>(totalFrames >> (8*i));
         for (int i = 0; i < 4; ++i) out[16+i] = static_cast<unsigned char>(apuMask >> (8*i));
         std::copy(apuRegisters.begin(), apuRegisters.end(), out.begin()+20);
-        std::memcpy(out.data()+48, "MPCVIS01", 8);
+        out[44] = SMB_immortal(state) ? 1 : 0;
+        std::memcpy(out.data()+48, PresentationTag, 8);
         for (int i = 0; i < 4; ++i) {
             out[56+i] = static_cast<unsigned char>(presentation.renderWidth() >> (8*i));
-            out[60+i] = static_cast<unsigned char>(mario::CharacterRenderer::Height >> (8*i));
+            out[60+i] = static_cast<unsigned char>(iskra::Presentation::Height >> (8*i));
         }
         std::copy(presentation.pixels().begin(), presentation.pixels().end(), out.begin()+64);
         std::memcpy(out.data()+imageEnd, "MPCBT001", 8);
@@ -121,8 +126,11 @@ struct Game {
     static bool validateExtra(const std::vector<unsigned char>& extra, std::string& error) {
         if (extra.size() < 48 ||
             std::memcmp(extra.data(), "MPCFR001", 8) != 0 ||
-            extra[19] != 0 || extra[44] || extra[45] || extra[46] || extra[47]) {
-            error = u8"Несовместимые данные сохранения Mario PC."; return false;
+            extra[19] != 0 || extra[44] > 1 || extra[45] || extra[46] || extra[47]) {
+            error = u8"Несовместимые данные сохранения игры."; return false;
+        }
+        if (extra[44] && (extra.size() < 64 || std::memcmp(extra.data()+48, PresentationTag, 8))) {
+            error = u8"Некорректные данные чит-кода."; return false;
         }
         if (extra.size() != 48) {
             if (extra.size() < 64) { error = "Incomplete saved presentation"; return false; }
@@ -133,10 +141,16 @@ struct Game {
             };
             const auto width = dimension(56), height = dimension(60);
             const size_t imageEnd = 64u + size_t(width)*height*3u;
-            const bool previous = width == 512 && height == 480 && extra.size() == imageEnd;
-            const bool current = width >= mario::CharacterRenderer::Width && width <= 512u*mario::CharacterRenderer::Scale &&
-                width % mario::CharacterRenderer::Scale == 0 && height == mario::CharacterRenderer::Height && extra.size() >= imageEnd;
-            if (std::memcmp(extra.data()+48, "MPCVIS01", 8) || (!previous && !current)) {
+            const bool previous = !std::memcmp(extra.data()+48, "MPCVIS01", 8) &&
+                width == 512 && height == 480 && extra.size() == imageEnd;
+            const bool current = width >= iskra::Presentation::Width && width <= 512u*iskra::Presentation::Scale &&
+                width % iskra::Presentation::Scale == 0 && height == iskra::Presentation::Height && extra.size() >= imageEnd;
+            const auto* tag = extra.data() + 48;
+            const bool knownTag = !std::memcmp(tag, "MPCVIS01", 8)
+                || !std::memcmp(tag, "ISKVS001", 8) || !std::memcmp(tag, "ISKVS002", 8)
+                || !std::memcmp(tag, "ISKVS003", 8) || !std::memcmp(tag, "ISKVS004", 8)
+                || !std::memcmp(tag, PresentationTag, 8);
+            if (!knownTag || (!previous && !current)) {
                 error = u8"Некорректное изображение в сохранении."; return false;
             }
             if (extra.size() > imageEnd) {
@@ -169,41 +183,32 @@ struct Game {
         for (int i = 0; i < 8; ++i) totalFrames |= std::uint64_t(extra[8+i]) << (8*i);
         for (int i = 0; i < 4; ++i) apuMask |= std::uint32_t(extra[16+i]) << (8*i);
         std::copy(extra.begin()+20, extra.begin()+44, apuRegisters.begin());
-        if (extra.size() == 48) presentation.seedFromNative256(pixels.data());
-        else {
+        SMB_set_immortal(state, extra[44] != 0);
+        const bool themedFrame=extra.size()>64 && !std::memcmp(extra.data()+48,PresentationTag,8);
+        if (extra.size()>64) {
             unsigned width=0,height=0;
             for (unsigned i=0;i<4;++i) { width |= unsigned(extra[56+i])<<(8*i); height |= unsigned(extra[60+i])<<(8*i); }
-            presentation.resizeViewport(height==mario::CharacterRenderer::Height ? int(width/mario::CharacterRenderer::Scale) : 256);
-            if (height==mario::CharacterRenderer::Height) presentation.restorePixels(extra.data()+64,size_t(width)*height*3);
-            else presentation.restoreScaledPixels(extra.data()+64,int(width),int(height));
+            presentation.resizeViewport(height==iskra::Presentation::Height ? int(width/iskra::Presentation::Scale) : 256);
+            if(themedFrame) presentation.restorePixels(extra.data()+64,presentation.frameBytes());
         }
         SMB_set_viewport_width(state,presentation.nativeWidth());
         const size_t imageEnd = savedPresentationEnd(extra);
         SMB_enable_backtracking(state, true);
+        SMB_set_no_timer(state,noTimer); SMB_set_smart_enemies(state,smartEnemies);
         if (extra.size() > imageEnd &&
             !SMB_backtracking_import(state, extra.data()+imageEnd+16, extra.size()-imageEnd-16))
             throw std::runtime_error("Cannot restore the visited level history");
-        // Restore metadata for the stored image without advancing or redrawing it.
-        // UI animations use the same simulation frame as the saved world image.
-        const auto* savedRam = SMB_presentation_ram(state);
-        visualLuigi = savedRam[0x753] != 0;
-        visualFire = savedRam[0x756] == 2;
-        visualScroll = SMB_viewport_camera_x(state) % 512;
-        visualScene.frame = totalFrames ? totalFrames - 1 : 0;
-        visualScene.cameraX = SMB_viewport_camera_x(state);
-        visualScene.areaType = savedRam[0x74E] & 3;
-        visualScene.night = savedRam[0x744] == 4 || savedRam[0x744] == 6 || savedRam[0x744] == 7;
-        visualScene.enabled = savedRam[0x722] != 0 &&
-            ((savedRam[0x770] == 0 && savedRam[0x772] == 3) ||
-             (savedRam[0x770] == 1 && savedRam[0x772] == 3) || savedRam[0x770] == 2);
-        ++presentationRevision;
-        buttons = {};
-        if (audio && SMB_audio_reset(audio)) {
-            SMB_audio_write_register(audio, 0x4015, (apuMask & (1u << 21)) ? apuRegisters[21] : 0x0f);
-            for (int i = 0; i <= 19; ++i)
-                if (apuMask & (1u << i)) SMB_audio_write_register(audio, static_cast<u16>(0x4000+i), apuRegisters[i]);
-            if (apuMask & (1u << 23)) SMB_audio_write_register(audio, 0x4017, apuRegisters[23]);
+        preparePresentation(true);
+        presentation.scene.camera=SMB_viewport_camera_x(state);
+        if(!themedFrame) {
+            const auto nativePixels=pixels;
+            SMB_redraw(state);
+            presentation.finishFrame(state);
+            pixels=nativePixels;
         }
+        ++presentationRevision;
+        buttons={};
+        audio.reset();
     }
     bool save(const std::filesystem::path& path, std::string& error) const {
         return mario::saveGame(path, state, pixels.data(), pixels.size(), error, snapshotExtra());
@@ -230,69 +235,17 @@ struct Game {
     static void patterns(void* p, const u8* chr) {
         auto* game = static_cast<Game*>(p);
         SMBraster_update_pattern_tables(game->raster, chr);
-        game->presentation.setPatternTables(chr);
     }
     static void palette(void* p, const u8* indices) {
         auto* game = static_cast<Game*>(p);
         SMBraster_update_palette(game->raster, indices);
-        game->presentation.setPalette(indices);
-        // Native palette callback follows NMI and precedes all tile draws.
-        game->presentation.setSceneNametables(SMB_ppuram(game->state), game->visualScroll);
-        // Read-only proof of the actual floor under each screen pixel. The
-        // current NMI nametables and wide-view cells are latched at this point.
-        std::array<unsigned char,512> support{};
-        const int terrainCamera = SMB_viewport_camera_x(game->state);
-        const auto* ppu = SMB_ppuram(game->state);
-        constexpr std::array<unsigned char,4> groundTiles{0xb4,0xb6,0xb5,0xb7};
-        for (int screenX=0;screenX<game->presentation.nativeWidth();++screenX) {
-            const unsigned column=unsigned(std::max(0,terrainCamera+screenX))/16;
-            unsigned char cells[4]{},floorPalette=0,collision=0;
-            bool proven=SMB_viewport_cell(game->state,column,11,cells,&floorPalette,&collision);
-            if (!proven && screenX<256 && ppu) {
-                const unsigned sourceX=(unsigned(screenX+game->visualScroll)%512)/8;
-                const unsigned base=0x2000+(sourceX/32)*0x400;
-                const unsigned tx=sourceX%32 & ~1u;
-                constexpr unsigned ty=26;
-                cells[0]=ppu[base+ty*32+tx];cells[1]=ppu[base+(ty+1)*32+tx];
-                cells[2]=ppu[base+ty*32+tx+1];cells[3]=ppu[base+(ty+1)*32+tx+1];
-                const unsigned attr=ppu[base+0x3c0+(ty/4)*8+tx/4];
-                floorPalette=(attr >> (((tx/2)%2)*2+((ty/2)%2)*4)) & 3;
-                proven=true;
-            }
-            support[screenX]=proven && floorPalette==1 &&
-                std::equal(groundTiles.begin(),groundTiles.end(),cells);
-        }
-        game->presentation.setGroundSupport(support);
-        game->presentation.refreshBackground();
-        if (game->presentation.nativeWidth()>256) {
-            const int camera=SMB_viewport_camera_x(game->state);
-            const unsigned first=unsigned(std::max(0,camera))/16;
-            const unsigned last=unsigned(std::max(0,camera)+game->presentation.nativeWidth()+15)/16;
-            for (unsigned col=first;col<=last;++col) for (unsigned row=0;row<13;++row) {
-                u8 tiles[4]{},palette=0,collision=0;
-                if (SMB_viewport_cell(game->state,col,row,tiles,&palette,&collision))
-                    game->presentation.setWorldCell(col,row,tiles,palette);
-            }
-        }
+        game->presentation.backdrop(game->state);
     }
     static void tile(void* p, SMB_tile tile) {
-        auto* game = static_cast<Game*>(p);
+        auto* game=static_cast<Game*>(p);
         ++game->tile_draws;
-        SMBraster_draw_tile(game->raster, tile);
-        const bool player = tile.extra_type == TILE_TYPE_SPRITE &&
-            ((unsigned(tile.extra_spriteidx) + 64 - game->playerSpriteStart) & 63u) < 8;
-        // Center the existing title artwork in the wider presentation only.
-        const auto* ram = SMB_ram(game->state);
-        if (game->presentation.nativeWidth() > 256 && ram[0x770] == 0 &&
-            ram[0x772] == 3 && ram[0x7A2] > 0) {
-            const bool titleBackground = tile.extra_type == TILE_TYPE_BG &&
-                tile.x >= 40 && tile.x < 216 && tile.y >= 32 && tile.y < 208 &&
-                (tile.y < 128 || (tile.tileidx & 0xff) <= 0x23 || tile.tileidx == 0x1ce);
-            const bool titleCursor = tile.extra_type == TILE_TYPE_SPRITE && !player &&
-                tile.x >= 48 && tile.x < 80 && tile.y >= 136 && tile.y < 184;
-            if (titleBackground || titleCursor) tile.x += (game->presentation.nativeWidth()-256)/2;
-        }
-        game->presentation.drawTile(tile, player, game->visualLuigi, game->visualFire);
+        SMBraster_draw_tile(game->raster,tile);
+        game->presentation.tile(tile);
     }
     static void sound(void* p, u16 address, u8 value) {
         auto* game = static_cast<Game*>(p);
@@ -302,11 +255,10 @@ struct Game {
             game->apuRegisters[index] = value;
             game->apuMask |= 1u << index;
         }
-        if (game->audio) SMB_audio_write_register(game->audio, address, value);
     }
     static void sound_frame(void* p) {
         auto* game = static_cast<Game*>(p);
-        if (game->audio) SMB_audio_end_frame(game->audio);
+        game->audio.frame(SMB_ram(game->state),game->totalFrames);
     }
     static void input(void* p, SMB_buttons* buttons) {
         *buttons = static_cast<Game*>(p)->buttons;
@@ -318,14 +270,15 @@ struct Game {
         buttons = {};
         totalFrames = 0; apuMask = 0; apuRegisters.fill(0); pixels.fill(0);
         backwardScrollFrames = maxCameraX = maxPlayerX = 0;
-        presentation.seedFromNative256(pixels.data()); ++presentationRevision;
-        if (audio) SMB_audio_reset(audio);
+        presentation.clear(); ++presentationRevision;
+        audio.reset();
         SMB_callbacks cb{};
         cb.userdata = this; cb.read_rom_bytes = read; cb.seek_rom = seek;
         cb.update_pattern_tables = patterns; cb.update_palette = palette; cb.draw_tile = tile;
         cb.apu_write_register = sound; cb.apu_end_frame = sound_frame; cb.joy1 = input; cb.joy2 = input;
         if (!state || !SMB_state_init(state, &cb)) return false;
         SMB_enable_backtracking(state, true);
+        SMB_set_no_timer(state,noTimer); SMB_set_smart_enemies(state,smartEnemies);
         SMB_set_viewport_width(state,presentation.nativeWidth());
         if (world) SMB_start_on_level(state, static_cast<u8>(world), static_cast<u8>(level));
         return true;
@@ -335,80 +288,42 @@ struct Game {
         if (!raster || !SMBraster_init(raster)) return false;
         SMBraster_provide_palette_lookup(raster, &PALETTE_BUILTIN[0][0]);
         SMBraster_set_buffer(raster, pixels.data(), W);
-        if (with_audio) {
-            audio = static_cast<SMB_audio*>(std::calloc(1, SMB_audio_size()));
-            if (!audio || !SMB_audio_init(audio, 44100, 60)) {
-                std::free(audio); audio = nullptr;
-                if (show_errors) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Mario PC",
-                    "Audio output is unavailable. The game will continue without sound.", nullptr);
-            }
-        }
+        if (with_audio && !audio.open() && show_errors)
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, u8"Искра",u8"Устройство звука недоступно.",nullptr);
         return reset();
     }
     void setViewport(int nativeWidth) {
         nativeWidth=std::clamp(nativeWidth,256,512);
         if (presentation.nativeWidth()==nativeWidth) return;
-        const bool preserveOverlap = state && activeSession();
-        const int previousWidth = presentation.renderWidth();
-        const auto previousFrame = preserveOverlap ? presentation.pixels() : std::vector<unsigned char>{};
         const auto previousNative = pixels;
         presentation.resizeViewport(nativeWidth);
         if (state) {
             SMB_set_viewport_width(state,nativeWidth);
             preparePresentation(true);
             SMB_redraw(state);
+            presentation.finishFrame(state);
             pixels = previousNative;
-            if (preserveOverlap) presentation.restoreViewportPrefix(previousFrame.data(),previousWidth);
         }
         ++presentationRevision;
     }
     void preparePresentation(bool redraw = false) {
         const auto* ram = redraw ? SMB_presentation_ram(state) : SMB_ram(state);
-        playerSpriteStart = ((ram[0x6E4] ? ram[0x6E4] : 4) / 4) & 63u;
-        visualLuigi = ram[0x753] != 0;
-        visualFire = ram[0x756] == 2;
-        std::array<SMB_tile, 8> sprites{};
-        for (unsigned i = 0; i < sprites.size(); ++i) {
-            const unsigned slot = (playerSpriteStart + i) & 63u;
-            const auto* oam = ram + 0x200 + slot * 4;
-            auto& sprite = sprites[i];
-            sprite.x = oam[3]; sprite.y = int(oam[0]) + 1; sprite.tileidx = oam[1];
-            sprite.paletteidx = (oam[2] & 3) + 4;
-            sprite.flip_horz = (oam[2] & 0x40) != 0; sprite.flip_vert = (oam[2] & 0x80) != 0;
-            sprite.extra_type = TILE_TYPE_SPRITE; sprite.extra_spriteidx = static_cast<u8>(slot);
-        }
-        // Presentation snapshots only; native collision, time and controls are untouched.
-        visualScroll = redraw ? SMB_viewport_camera_x(state)%512 : (ram[0x778] & 1)*256 + ram[0x73f];
-        visualScene.frame = redraw && totalFrames ? totalFrames-1 : totalFrames;
-        visualScene.cameraX = redraw ? SMB_viewport_camera_x(state) : ram[0x71a]*256 + ram[0x71c];
-        visualScene.areaType = ram[0x74e] & 3;
-        visualScene.night = ram[0x744] == 4 || ram[0x744] == 6 || ram[0x744] == 7;
-        visualScene.enabled = ram[0x722] != 0 &&
-            ((ram[0x770] == 0 && ram[0x772] == 3) || (ram[0x770] == 1 && ram[0x772] == 3) || ram[0x770] == 2);
-        presentation.prepareScene(visualScene);
-        SMBraster_clear(raster); presentation.beginFrame(true);
-        const mario::PlayerAnimation animation{ram[0x70C], ram[0x781], ram[0x70D], ram[0x1D],
-            int(static_cast<std::int8_t>(ram[0x9F])), ram[0x70B] != 0, ram[0x711],
-            int(static_cast<std::int8_t>(ram[0x57])), ram[0x433], ram[0x79F] != 0};
-        presentation.preparePlayer(sprites, visualLuigi, visualFire, ram[0x704] != 0,
-            ram[0x57] != 0, &animation);
-        presentation.prepareCoins(ram);
-        presentation.preparePowerups(ram);
-        presentation.prepareCamelEnemy(ram);
-        presentation.prepareArmadilloEnemy(ram);
+        presentation.prepare(ram,redraw && totalFrames ? totalFrames-1 : totalFrames);
+        if(!redraw) SMBraster_clear(raster);
     }
     void tick() {
         preparePresentation();
         auto* ram=SMB_ram(state);
         const unsigned oldCamera = ram[0x71a]*256u + ram[0x71c];
-        SMB_tick(state); ++totalFrames; ++presentationRevision;
+        SMB_tick(state);
+        presentation.finishFrame(state);
+        ++totalFrames; ++presentationRevision;
         const unsigned camera = ram[0x71a]*256u + ram[0x71c];
         if (ram[0x770] == 1 && ram[0x772] == 3 && ram[0xE] == 8 && camera < oldCamera) ++backwardScrollFrames;
         maxCameraX = std::max(maxCameraX, camera);
         maxPlayerX = std::max(maxPlayerX, ram[0x6d]*256u + ram[0x86]);
     }
     ~Game() {
-        if (audio) { SMB_audio_fini(audio); std::free(audio); }
         if (raster) { SMBraster_fini(raster); std::free(raster); }
         std::free(state);
     }
@@ -444,7 +359,7 @@ static void capture_graphics(const Game& game, const std::string& path) {
     if (path.empty()) return;
     const auto parent = std::filesystem::u8path(path).parent_path();
     if (!parent.empty()) std::filesystem::create_directories(parent);
-    SDL_Surface* surface = SDL_CreateSurfaceFrom(game.presentation.renderWidth(), mario::CharacterRenderer::Height,
+    SDL_Surface* surface = SDL_CreateSurfaceFrom(game.presentation.renderWidth(), iskra::Presentation::Height,
         SDL_PIXELFORMAT_RGB24, const_cast<unsigned char*>(game.presentation.pixels().data()), game.presentation.renderWidth()*3);
     if (!surface) throw std::runtime_error(SDL_GetError());
     const bool saved = SDL_SavePNG(surface, path.c_str()); SDL_DestroySurface(surface);
@@ -480,7 +395,7 @@ static bool any_buttons(const SMB_buttons& b) {
 
 int main(int argc, char** argv) {
     bool smoke = false, fast = false, fullscreen = false, auto_play = false;
-    bool start_settings = false, save_settings = false;
+    bool start_settings = false, save_settings = false, exercise_title_controls = false;
     int frames = 0, world = 0, level = 0, settings_tab = 3;
     bool level_selected = false;
     std::string image_path, graphics_path, ui_path, report_path, settings_override, save_path, load_path, slot_override;
@@ -504,6 +419,7 @@ int main(int argc, char** argv) {
         auto number = [&]() -> int { const auto v = value(); size_t n = 0; int result = std::stoi(v, &n); if (n != v.size()) throw std::runtime_error("Invalid number"); return result; };
         try {
             if (arg == "--smoke") smoke = true;
+            else if (arg == "--title-controls") exercise_title_controls = true;
             else if (arg == "--fast") fast = true;
             else if (arg == "--fullscreen") fullscreen = true;
             else if (arg == "--autoplay") auto_play = true;
@@ -524,7 +440,7 @@ int main(int argc, char** argv) {
             else return 2;
         } catch (...) { return 2; }
     }
-    if (frames < 0 || settings_tab < 0 || settings_tab > 3 ||
+    if (frames < 0 || settings_tab < 0 || settings_tab > 4 ||
         (level_selected && (world < 1 || world > 8 || level < 1 || level > 4))) return 2;
     if (!input_script.empty()) {
         if (!smoke && !auto_play) return 2;
@@ -556,7 +472,7 @@ int main(int argc, char** argv) {
             std::filesystem::path config_path;
             if (!settings_override.empty()) config_path = std::filesystem::u8path(settings_override);
             else {
-                char* pref_path = SDL_GetPrefPath("MarioPC", "MarioPC");
+                char* pref_path = SDL_GetPrefPath("Iskra", "ForestGuardian");
                 if (!pref_path) throw std::runtime_error(SDL_GetError());
                 config_path = std::filesystem::u8path(pref_path) / "settings.ini";
                 SDL_free(pref_path);
@@ -574,14 +490,22 @@ int main(int argc, char** argv) {
                 loaded_presentation_hash = fingerprint(game.presentation.pixels().data(), game.presentation.pixels().size());
             };
             std::string config_notice;
-            auto settings = mario::loadSettings(config_path, config_notice);
+            auto firstSettings = config_path;
+            if (settings_override.empty() && !std::filesystem::exists(config_path)) {
+                // Existing players keep their monitor, button bindings and game rules.
+                const auto legacy = config_path.parent_path().parent_path().parent_path() /
+                                    "MarioPC" / "MarioPC" / "settings.ini";
+                if (std::filesystem::is_regular_file(legacy)) firstSettings = legacy;
+            }
+            auto settings = mario::loadSettings(firstSettings, config_notice);
             if (fullscreen) settings.screen_mode = 1;
+            game.setGameplayOptions(settings.no_timer,settings.smart_enemies);
             const SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | (smoke ? SDL_WINDOW_HIDDEN : 0);
-            window = SDL_CreateWindow(u8"Super Mario Bros. — Mario PC", settings.width, settings.height, flags);
+            window = SDL_CreateWindow(u8"Искра — Хранитель леса", settings.width, settings.height, flags);
             if (!window) throw std::runtime_error(SDL_GetError());
             renderer = SDL_CreateRenderer(window, nullptr);
             if (!renderer) throw std::runtime_error(SDL_GetError());
-            texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, 512*mario::CharacterRenderer::Scale, mario::CharacterRenderer::Height);
+            texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, 512*iskra::Presentation::Scale, iskra::Presentation::Height);
             if (!texture) throw std::runtime_error(SDL_GetError());
             std::string video_error;
             if (!mario::applyVideo(window, renderer, texture, settings, video_error)) {
@@ -654,8 +578,8 @@ int main(int argc, char** argv) {
                 lastPresentAt = 0;
             };
             auto setSoundPaused = [&](bool paused) {
-                if (game.audio && paused != audioPaused) {
-                    if (!SMB_audio_set_paused(game.audio,paused)) throw std::runtime_error(SDL_GetError());
+                if (game.audio.ready() && paused != audioPaused) {
+                    if (!game.audio.pause(paused)) throw std::runtime_error(SDL_GetError());
                     audioPaused = paused;
                 }
             };
@@ -706,7 +630,7 @@ int main(int argc, char** argv) {
                         }
                         if (event.key.scancode == SDL_SCANCODE_F12 && !was_capturing) {
                             const char* base = SDL_GetBasePath();
-                            screenshot_request = std::string(base ? base : "") + "screenshots/mario.png";
+                            screenshot_request = std::string(base ? base : "") + "screenshots/iskra.png";
                         }
                     }
                 }
@@ -723,27 +647,36 @@ int main(int argc, char** argv) {
                 }
                 menu_was_visible = menu.visible();
                 menu.setGameRunning(game.activeSession());
+                menu.setImmortal(SMB_immortal(game.state));
                 const bool worldPaused = menu.visible() || (!smoke && !auto_play && !focused);
                 setSoundPaused(worldPaused);
                 if (!smoke && !auto_play && !focused && !menu.visible()) {
                     rebasePacing(); SDL_Delay(10); continue;
                 }
                 updateViewport();
+                game.setGameplayOptions(settings.no_timer,settings.smart_enemies);
                 const auto simulationNow = SDL_GetTicksNS();
                 if (!worldPaused && activeSampleWasRunning) activeSimulationNS += simulationNow-activeSampleAt;
                 activeSampleAt = simulationNow; activeSampleWasRunning = !worldPaused;
                 unsigned nativeSteps = 0;
                 game.buttons = mario::readControls(settings, pad);
                 if (smoke || auto_play) game.buttons = testInput(game.totalFrames);
+                // Test the physical controls before the title consumes them.
+                // Held accept after closing a menu cannot start another game.
+                if (resume_guard && ((!smoke && !auto_play)||exercise_title_controls)) {
+                    const bool released=!any_buttons(game.buttons)&&!pad_menu_down;
+                    game.buttons={};
+                    if(released&&!menu.visible()) resume_guard=false;
+                }
+                if ((!smoke && !auto_play)||exercise_title_controls) menu.filterTitleControls(game.buttons);
+                if(menu.takeTitleActivity() && SMB_ram(game.state)[0x770]==0 &&
+                   SMB_ram(game.state)[0x772]==3 && SMB_ram(game.state)[0x7a2]>0)
+                    SMB_ram(game.state)[0x7a2]=0x18;
                 if (menu.visible()) {
                     resume_guard = true;
                     game.buttons = {};
                     rebasePacing();
                 } else {
-                    if (resume_guard && !smoke && !auto_play) {
-                        if (!any_buttons(game.buttons) && !pad_menu_down) resume_guard = false;
-                        game.buttons = {};
-                    }
                     if (pad_menu_down) game.buttons = {};
                     // Diagnostic replay modes retain exactly one native step
                     // per requested frame. Normal gameplay uses its own clock.
@@ -751,12 +684,12 @@ int main(int argc, char** argv) {
                     nativeSteps = due;
                     maxTicksPerPresent = std::max(maxTicksPerPresent,due);
                     for (unsigned i = 0; i < due; ++i) {
-                        if (smoke || auto_play) game.buttons = testInput(game.totalFrames);
+                        if ((smoke || auto_play) && !exercise_title_controls) game.buttons = testInput(game.totalFrames);
                         if (queued_start) { game.buttons = {}; game.buttons.start = true; queued_start = false; }
                         game.tick(); ++ticks;
                     }
                 }
-                const SDL_Rect upload{0,0,game.presentation.renderWidth(),mario::CharacterRenderer::Height};
+                const SDL_Rect upload{0,0,game.presentation.renderWidth(),iskra::Presentation::Height};
                 if (uploadedRevision != game.presentationRevision) {
                     if (!SDL_UpdateTexture(texture,&upload,game.presentation.pixels().data(),game.presentation.renderWidth()*3)) throw std::runtime_error(SDL_GetError());
                     uploadedRevision = game.presentationRevision; ++textureUploads;
@@ -771,12 +704,12 @@ int main(int argc, char** argv) {
                 SDL_FRect dest{static_cast<float>((rw-viewWidth*scale)/2), static_cast<float>((rh-H*scale)/2),
                                static_cast<float>(viewWidth*scale),static_cast<float>(H*scale)};
                 lastRenderDest = dest; lastRenderScale = scale;
-                const SDL_FRect source{0,0,float(game.presentation.renderWidth()),float(mario::CharacterRenderer::Height)};
+                const SDL_FRect source{0,0,float(game.presentation.renderWidth()),float(iskra::Presentation::Height)};
                 if (!SDL_RenderTexture(renderer,texture,&source,&dest)) throw std::runtime_error(SDL_GetError());
                 const auto* hudRam = SMB_ram(game.state);
                 mario::PresentationHud hud;
                 hud.nativeWidth=game.presentation.nativeWidth();
-                hud.animationFrame = game.visualScene.frame;
+                hud.animationFrame = game.presentation.scene.frame;
                 hud.valid = true; hud.currentPlayer = hudRam[0x753] & 1;
                 hud.score.clear();
                 const int scoreBase = 0x7D7 + 6 + hud.currentPlayer * 6;
@@ -786,19 +719,31 @@ int main(int argc, char** argv) {
                 hud.world = hudRam[0x75F] + 1; hud.level = hudRam[0x75C] + 1;
                 hud.timer = 100 * std::min(9, int(hudRam[0x7F8])) +
                     10 * std::min(9, int(hudRam[0x7F9])) + std::min(9, int(hudRam[0x7FA]));
-                hud.mode = hudRam[0x770]; hud.task = hudRam[0x772]; hud.demoTimer = hudRam[0x7A2];
+                hud.screenTask = hudRam[0x73c]; hud.mode = hudRam[0x770]; hud.task = hudRam[0x772]; hud.demoTimer = hudRam[0x7A2];
+                hud.worldSelectAvailable = hudRam[0x7FC] != 0;
+                hud.titlePlayers = hudRam[0x77A]&1; hud.noTimer=settings.no_timer;
+                mario::readWaygateSigns(hud, hudRam[0x6D6], SMB_ppuram(game.state), game.presentation.scene.camera);
                 menu.setPresentationHud(hud, dest);
                 menu.setBackdropPixels(game.presentation.pixels().data(), game.presentation.renderWidth(),
-                    mario::CharacterRenderer::Height, dest, game.presentationRevision);
+                    iskra::Presentation::Height, dest, game.presentationRevision);
                 if (menu.render()) running = false;
                 const auto action = menu.takeAction();
                 switch (action) {
                 case mario::MenuAction::None: break;
                 case mario::MenuAction::StartGame:
                     if (game.prepareStart()) {
+                        SMB_set_immortal(game.state, false);
+                        const int titlePlayers=menu.takeTitlePlayers();
+                        if(titlePlayers>=0) SMB_ram(game.state)[0x77A]=static_cast<unsigned char>(titlePlayers);
                         queued_start = true; resume_guard = true; menu.close();
                         rebasePacing();
                     } else menu.notifyGameAction(false, u8"Не удалось начать игру.");
+                    break;
+                case mario::MenuAction::EnableImmortality:
+                    if (game.activeSession()) {
+                        SMB_set_immortal(game.state, true);
+                        menu.notifyGameAction(true, u8"Неуязвимость включена.");
+                    }
                     break;
                 case mario::MenuAction::SaveGame:
                     if (game.activeSession() && game.save(game_save_path, video_error)) {
@@ -825,7 +770,7 @@ int main(int argc, char** argv) {
                 ++render_frames;
                 if (!screenshot_request.empty()) {
                     try { capture_ui(renderer, screenshot_request); }
-                    catch (const std::exception& save_error) { if (!smoke) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Mario PC", save_error.what(), window); }
+                    catch (const std::exception& save_error) { if (!smoke) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, u8"Искра", save_error.what(), window); }
                 }
                 if (frames > 0 && render_frames >= static_cast<unsigned long long>(frames)) {
                     capture_ui(renderer, ui_path);
@@ -875,7 +820,6 @@ int main(int argc, char** argv) {
                 const auto* ram = SMB_ram(game.state);
                 int ww=0,wh=0,rw=0,rh=0; const auto* actual_mode = SDL_GetWindowFullscreenMode(window);
                 SDL_GetWindowSize(window, &ww, &wh); SDL_GetRenderOutputSize(renderer, &rw, &rh);
-                const auto assetStats=mario::worldAssetCacheStats();
                 auto sortedFrameWork=frameWorkMs;
                 std::sort(sortedFrameWork.begin(),sortedFrameWork.begin()+frameWorkCount);
                 double frameWorkMean=0;
@@ -888,17 +832,16 @@ int main(int argc, char** argv) {
                     (displayMode->refresh_rate_denominator > 0 ?
                      double(displayMode->refresh_rate_numerator)/displayMode->refresh_rate_denominator :
                      displayMode->refresh_rate) : 0;
-                SMB_audio_stats audioStats{};
-                if (game.audio) SMB_audio_get_stats(game.audio,&audioStats);
+                const auto audioStats=game.audio.stats;
                 std::ofstream report(std::filesystem::u8path(report_path));
                 report << "{\n\"native_gameplay\":true,\"rom_required_at_runtime\":false,"
                        << "\"frames\":" << render_frames << ",\"render_frames\":" << render_frames << ",\"core_ticks\":" << ticks
                        << ",\"elapsed_ms\":" << (SDL_GetTicksNS()-started)/1000000.0
-                       << ",\"audio_initialized\":" << (game.audio ? "true":"false")
+                       << ",\"audio_initialized\":" << (game.audio.ready() ? "true":"false")
                        << ",\"apu_writes\":" << game.apu_writes << ",\"tiles\":" << game.tile_draws
                        << ",\"pixel_hash\":" << fingerprint(game.pixels.data(),game.pixels.size())
-                       << ",\"ui_glass\":true,\"graphics_scale\":" << mario::CharacterRenderer::Scale
-                       << ",\"graphics_width\":" << game.presentation.renderWidth() << ",\"graphics_height\":" << mario::CharacterRenderer::Height
+                       << ",\"ui_glass\":true,\"graphics_scale\":" << iskra::Presentation::Scale
+                       << ",\"graphics_width\":" << game.presentation.renderWidth() << ",\"graphics_height\":" << iskra::Presentation::Height
                        << ",\"graphics_native_width\":" << game.presentation.nativeWidth()
                        << ",\"viewport_native_width\":" << game.presentation.nativeWidth()
                        << ",\"dest_width\":" << lastRenderDest.w
@@ -908,10 +851,6 @@ int main(int argc, char** argv) {
                        << ",\"viewport_camera_x\":" << SMB_viewport_camera_x(game.state)
                        << ",\"viewport_scale_x\":" << lastRenderScale
                        << ",\"viewport_scale_y\":" << lastRenderScale
-                       << ",\"world_assets_decoded\":" << assetStats.decodedFrames
-                       << ",\"world_asset_cache_entries\":" << assetStats.entries
-                       << ",\"world_asset_cache_bytes\":" << assetStats.bytes
-                       << ",\"world_asset_cache_peak_bytes\":" << assetStats.peakBytes
                        << ",\"frame_work_samples\":" << frameWorkCount
                        << ",\"frame_work_ms_mean\":" << frameWorkMean
                        << ",\"frame_work_ms_p95\":" << frameWorkP95
@@ -942,10 +881,10 @@ int main(int argc, char** argv) {
                        << ",\"audio_overrun_events\":" << audioStats.overrun_events
                        << ",\"audio_input_queue_ms\":" << audioStats.current_input_queue_ms
                        << ",\"audio_input_queue_max_ms\":" << audioStats.max_input_queue_ms
-                       << ",\"world_background\":" << (game.visualScene.enabled?"true":"false")
-                       << ",\"world_scene_type\":" << game.visualScene.areaType
-                       << ",\"world_scene_frame\":" << game.visualScene.frame
-                       << ",\"world_camera\":" << game.visualScene.cameraX
+                       << ",\"world_background\":" << (game.presentation.playing?"true":"false")
+                       << ",\"world_scene_type\":" << game.presentation.scene.area
+                       << ",\"world_scene_frame\":" << game.presentation.scene.frame
+                       << ",\"world_camera\":" << game.presentation.scene.camera
                        << ",\"camera_x\":" << (ram[0x71a]*256u+ram[0x71c])
                        << ",\"player_x\":" << (ram[0x6d]*256u+ram[0x86])
                        << ",\"lives\":" << unsigned(ram[0x75a]+1)
@@ -970,6 +909,12 @@ int main(int argc, char** argv) {
                        << ",\"display_id\":" << SDL_GetDisplayForWindow(window)
                        << ",\"actual_fullscreen\":" << ((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)?"true":"false") << ",\"actual_mode_width\":" << (actual_mode?actual_mode->w:0) << ",\"actual_mode_height\":" << (actual_mode?actual_mode->h:0)
                        << ",\"monitor\":" << settings.monitor << ",\"screen_mode\":" << settings.screen_mode
+                       << ",\"title_controls_exercised\":" << (exercise_title_controls?"true":"false")
+                       << ",\"title_players\":" << unsigned(ram[0x77a])
+                       << ",\"no_timer\":" << (settings.no_timer?"true":"false")
+                       << ",\"smart_enemies\":" << (settings.smart_enemies?"true":"false")
+                       << ",\"immortal\":" << (SMB_immortal(game.state)?"true":"false")
+                       << ",\"timer_value\":" << (100*ram[0x7f8]+10*ram[0x7f9]+ram[0x7fa])
                        << ",\"scaling\":" << settings.scaling << ",\"filter\":" << settings.filter << ",\"vsync\":" << (settings.vsync?"true":"false")
                        << ",\"deadzone\":" << settings.deadzone << ",\"bound_jump\":" << settings.bindings[static_cast<int>(mario::Action::Jump)].primary
                        << ",\"bound_jump_pad\":" << settings.bindings[static_cast<int>(mario::Action::Jump)].pad
@@ -981,7 +926,7 @@ int main(int argc, char** argv) {
             }
         } catch (const std::exception& error) {
             result = 1;
-            if (!smoke) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Mario PC", error.what(), window);
+            if (!smoke) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, u8"Искра", error.what(), window);
             if (!report_path.empty()) {
                 const auto parent = std::filesystem::u8path(report_path).parent_path();
                 if (!parent.empty()) std::filesystem::create_directories(parent);

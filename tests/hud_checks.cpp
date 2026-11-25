@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -75,8 +76,8 @@ struct Harness {
 bool inside(int x, int y, const SDL_FRect& dest, bool title) {
     const float nx = (x + 0.5f - dest.x) * 256 / dest.w;
     const float ny = (y + 0.5f - dest.y) * 240 / dest.h;
-    return nx >= 0 && nx < 256 && ny >= 0 && ny < 32 ||
-        title && nx >= 40 && nx < 216 && ny >= 32 && ny < 128;
+    // The illustrated title fills the game viewport. Ordinary play reserves only its header.
+    return nx >= 0 && nx < 256 && ny >= 0 && ny < (title ? 240 : 32);
 }
 int compareOutside(const Image& baseline, const Image& actual, const SDL_FRect& dest, bool title) {
     require(baseline.width == actual.width && baseline.height == actual.height, "HUD comparison uses equal actual framebuffer sizes");
@@ -114,17 +115,26 @@ int main(int argc, char** argv) {
         {
             Harness h(output); mario::PresentationHud hud;
             hud.valid = true; hud.score = "123456"; hud.coins = 42; hud.lives = 3; hud.world = 8; hud.level = 4; hud.timer = 400; hud.mode = 1;
-            const struct { int w, h; SDL_FRect dest; const char* name; } layouts[] = {
-                {768,720,{0,0,768,720},"hud-gameplay.png"}, {512,480,{0,0,512,480},"hud-compact.png"},
-                {960,540,{0,0,960,540},"hud-stretch.png"}, {960,720,{96,0,768,720},"hud-letterbox.png"}
+            const struct { int w, h, nativeWidth; SDL_FRect dest; const char* name; } layouts[] = {
+                {768,720,256,{0,0,768,720},"hud-gameplay.png"}, {512,480,256,{0,0,512,480},"hud-compact.png"},
+                {960,540,427,{0,0,960,540},"hud-wide.png"}, {960,720,256,{96,0,768,720},"hud-letterbox.png"},
+                {960,720,320,{0,0,960,720},"hud-standard.png"},{1152,480,512,{64,0,1024,480},"hud-ultrawide.png"}
             };
             for (const auto& layout : layouts) {
+                hud.nativeWidth = layout.nativeWidth;
                 h.resize(layout.w, layout.h); for (int warm = 0; warm < 3; ++warm) h.frame({},layout.dest);
                 const auto baseline = h.frame({}, layout.dest);
                 const auto gameplay = h.frame(hud, layout.dest, layout.name); compareOutside(baseline, gameplay, layout.dest, false);
                 require(!h.menu->visible() && h.menu->takeAction() == mario::MenuAction::None, "HUD leaves menu interaction state untouched");
                 auto title = hud; title.mode = 0; title.task = 3; title.demoTimer = 0x18;
                 const auto titleImage = h.frame(title, layout.dest, layout.w == 768 ? "hud-title.png" : nullptr);
+                // A cropped textured quad used to drop its upper-right triangle on the SDL software backend.
+                const int probeX = int(layout.dest.x + layout.dest.w * .77f);
+                const int probeY = int(layout.dest.y + layout.dest.h * .20f);
+                const auto begin = titleImage.pixels.begin() + probeY * titleImage.width + probeX;
+                require(std::adjacent_find(begin, begin + int(layout.dest.w * .12f),
+                        std::not_equal_to<Uint32>()) != begin + int(layout.dest.w * .12f),
+                        "Illustrated title retains detail across its upper right on every aspect");
                 const int titleChanges = compareOutside(baseline, titleImage, layout.dest, true);
                 const int gameChanges = compareOutside(baseline, gameplay, layout.dest, false);
                 require(titleChanges > gameChanges + 500, "Ready title additionally replaces the original logo area");
@@ -140,6 +150,7 @@ int main(int argc, char** argv) {
                 compareOutside(baseline, loadingTitle, layout.dest, false);
                 require(loadingTitle.pixels == gameplay.pixels, "Title card is gated by the native ready-title task");
             }
+            hud.nativeWidth=256;
             h.resize(768,720); const SDL_FRect dest{0,0,768,720};
             for (int warm = 0; warm < 3; ++warm) h.frame({},dest);
             // The settings panel samples the scene beneath the native title area.
@@ -160,8 +171,49 @@ int main(int argc, char** argv) {
             const auto normal = h.frame(hud, dest); auto warning = hud; warning.timer = 99;
             const auto urgent = h.frame(warning, dest, "hud-timer-warning.png");
             require(redPixels(urgent, dest) > redPixels(normal, dest) + 20, "Native timer below100 receives a visible red alert");
+            auto noTimer = warning; noTimer.noTimer = true;
+            const auto unlimited = h.frame(noTimer, dest, "hud-no-timer.png");
+            require(redPixels(unlimited,dest) <= redPixels(normal,dest), "Untimed mode has no urgent red countdown warning");
+            noTimer.timer=0;
+            require(h.frame(noTimer,dest).pixels==unlimited.pixels, "Untimed HUD shows a stable disabled indicator instead of countdown digits");
             auto luigi = hud; luigi.currentPlayer = 1; const auto playerTwo = h.frame(luigi, dest);
             require(playerTwo.pixels != normal.pixels, "Native second-player identity changes the HUD label");
+            auto waygates = hud;
+            waygates.task = 3;
+            std::array<std::uint8_t, 0x3000> ppu{};
+            ppu[0x2625] = 4; ppu[0x262d] = 3; ppu[0x2635] = 2;
+            mario::readWaygateSigns(waygates, 4, ppu.data(), 256);
+            require(waygates.waygates[0].x == 44 && waygates.waygates[1].world == 3 &&
+                    waygates.waygates[2].x == 172, "All three portal signs use native destinations and positions");
+            require(h.frame(waygates, dest).pixels != normal.pixels, "Discovered portals show their signs in the scene");
+            ppu[0x2625] = 0x24; ppu[0x2635] = 0x24;
+            mario::readWaygateSigns(waygates, 5, ppu.data(), 256 + 16);
+            require(waygates.waygates[0].world == 0 && waygates.waygates[1].x == 92 && waygates.waygates[2].world == 0,
+                    "Single portal sign tracks camera and ignores blank native cells");
+            mario::readWaygateSigns(waygates, 0, ppu.data(), 256);
+            require(waygates.waygates[1].world == 0, "Warp signs disappear after leaving their room");
+            auto unlocked = menuTitle;
+            const auto lockedTitle = h.frame(unlocked, dest);
+            unlocked.worldSelectAvailable = true;
+            require(h.frame(unlocked, dest).pixels != lockedTitle.pixels, "Clearing the game reveals the chapter selector");
+            auto chapter = hud;
+            chapter.mode = 1; chapter.task = 1; chapter.screenTask = 7;
+            std::vector<Uint32> last;
+            for (int world = 1; world <= 8; ++world) {
+                chapter.world = world;
+                const auto entry = h.frame(chapter,dest,world == 1 ? "chapter-entry.png" : nullptr);
+                require(entry.pixels != normal.pixels && entry.pixels != last,
+                        "Each native chapter entry shows its own forest story");
+                last = entry.pixels;
+            }
+            auto ending = chapter;
+            ending.mode = 2; ending.task = 3;
+            const auto final = h.frame(ending,dest,"final-dawn.png");
+            require(final.pixels != last, "Final beacon introduces a distinct ending");
+            ending.task = 4;
+            require(h.frame(ending, dest).pixels != final.pixels, "Final input prompt appears when native ending accepts input");
+            auto exhausted = hud; exhausted.mode = 3;
+            require(h.frame(exhausted,dest).pixels != final.pixels, "Game-over and final victory are distinct screens");
             const auto baseline = h.frame({}, dest);
             auto invalid = hud; invalid.valid = false;
             require(h.frame(invalid, dest).pixels == baseline.pixels, "Unset presentation data renders no replacement HUD");
@@ -177,10 +229,10 @@ int main(int argc, char** argv) {
             const auto* draw = ImGui::GetDrawData(); require(draw->TotalVtxCount > 100, "2xDPI HUD submits actual ImGui drawing geometry");
             int commands = 0;
             for (const auto* list : draw->CmdLists) for (const auto& command : list->CmdBuffer) if (command.ElemCount) {
-                ++commands; require(enclosed(command.ClipRect, ImVec4(96,0,864,96)) || enclosed(command.ClipRect, ImVec4(216,96,744,384)),
-                    "2xDPI commands remain inside converted native header/title masks");
+                ++commands; require(enclosed(command.ClipRect, ImVec4(96,0,864,720)),
+                    "2xDPI title commands stay inside the converted game viewport");
             }
-            require(commands >= 2, "2xDPI HUD and title each submit a clipped draw command");
+            require(commands > 0, "2xDPI title submits clipped drawing geometry");
         }
         SDL_Quit(); std::cout << "Mario HUD geometry checks passed: " << checks << '\n'; return 0;
     } catch (const std::exception& error) {

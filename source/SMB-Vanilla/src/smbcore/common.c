@@ -1957,8 +1957,9 @@ void PlayerLoseLife(void) {
   IRQUpdateFlag = 0;
 #endif
   EventMusicQueue = MUSIC_EVENT_STOP;
-  NumberofLives -= 1;
-  if (NumberofLives >= 0x80) {
+  const bool keep_life = SMB1_ONLY && SMB_immortal(SMB_STATE);
+  if (!keep_life) NumberofLives -= 1;
+  if (!keep_life && NumberofLives >= 0x80) {
     OperMode = OM_UNK_3;
     OperMode_Task = OMT_3_UNK_0;
     return;
@@ -1976,7 +1977,7 @@ void PlayerLoseLife(void) {
     HalfwayPage = 0;
   }
 #ifdef SMB1_MODE
-  TransposePlayers();
+  if (!keep_life) TransposePlayers();
 #endif
   ContinueGame();
 }
@@ -3396,6 +3397,9 @@ void SetupBubble_buggy(const u8 buggy_argument_1, const u8 buggy_argument_2) {
 // SM2MAIN:82bb
 // Signature: [] -> []
 void RunGameTimer(void) {
+  // Only the level countdown is optional. TimerControl, invulnerability,
+  // animation, injury/death and the separate end-of-level bonus still run.
+  if (SMB1_ONLY && SMB_no_timer(SMB_STATE) && OperMode == OM_UNK_1) return;
   if (OperMode == OM_UNK_0) {
     return;
   }
@@ -3427,6 +3431,7 @@ void RunGameTimer(void) {
   {
     const bool is_time_up = GameTimerDisplay[0] == 0 && GameTimerDisplay[1] == 0 && GameTimerDisplay[2] == 0;
     if (is_time_up) {
+      if (SMB1_ONLY && SMB_immortal(SMB_STATE)) return;
       PlayerStatus = PLAYERSTATUS_SMALL;
       ForceInjury();
       GameTimerExpiredFlag = true;
@@ -6197,10 +6202,221 @@ void RunRetainerObj(const u8 objoff) {
 }
 
 
+// Enhanced PC enemy decisions never edit the level or change a speed value's
+// magnitude. Absolute metatile probes must not alias the native 512px ring.
+static bool smart_enemy_metatile(int world_x, int world_y, u8 *metatile) {
+  if (world_x < 0 || world_x > 65535 || world_y < 32 || world_y >= 240) return false;
+  const u16 column = (u16)(world_x / 16), row = (u16)((world_y - 32) / 16);
+  u8 tiles[4], palette;
+  if (SMB_viewport_cell(SMB_STATE, column, row, tiles, &palette, metatile)) return true;
+  // Without optional history, only the current native screen is known. Never
+  // treat an unparsed column as a clear path or as somebody else's floor.
+  const unsigned first = LOAD_16(ScreenLeft_PageLoc, ScreenLeft_X_Pos) / 16;
+  if (column < first || column >= first + 16) return false;
+  *metatile = get_metatile(column, row);
+  return true;
+}
+static bool smart_enemy_solid(u8 metatile) {
+  return metatile != 0 && !ChkForNonSolids(metatile);
+}
+static int smart_enemy_player_floor(void) {
+  // BlockBufferCollision_coords uses yadder0x20 for all player foot probes
+  // (indices1/2,8/9,15/16). Size and crouching change only the upper extent.
+  return (int)Player_Y_Position + 32;
+}
+static bool smart_enemy_player_below(const u8 objoff) {
+  return Player_Y_HighPos == 1 && smart_enemy_player_floor() >= (int)Enemy_Y_Position[objoff] + 24 + 16;
+}
+// Read-only forecast of the ordinary walking/falling path, not a new physics
+// model. Its 16.8 positions, X speed and 0x3d/3 gravity are exactly the values
+// used below by MoveObjectHorizontally/MoveD_EnemyVertically. It authorizes a
+// descent only when the first lower landing and the forward body corridor are
+// known. A bottomless gap or unknown column is never a usable exit.
+static bool smart_enemy_drop(const u8 objoff, u8 direction, int start_x, int *landing_x, int *landing_y) {
+  if (!smart_enemy_player_below(objoff)) return false;
+  const int old_floor = (int)Enemy_Y_Position[objoff] + 24;
+  int magnitude = Enemy_X_Speed[objoff];
+  if (magnitude < 0) magnitude = -magnitude;
+  if (!magnitude || magnitude > 32) return false;
+  const int velocity_x = direction == DIR_RIGHT ? magnitude * 16 : -magnitude * 16;
+  int x = start_x * 256 + (u8)Enemy_X_MoveForce[objoff];
+  int y = (int)Enemy_Y_Position[objoff] * 256 + (u8)Enemy_YMF_Dummy[objoff];
+  u8 floor, wall;
+  bool left_edge = false;
+  // Finish the last supported half-body using the original walking speed.
+  for (unsigned step = 0; step < 64; ++step) {
+    const int px = x >> 8, lead = direction == DIR_RIGHT ? px + 16 : px;
+    if (!smart_enemy_metatile(px + 8, old_floor, &floor) ||
+        !smart_enemy_metatile(lead, old_floor - 4, &wall) || smart_enemy_solid(wall)) return false;
+    if (!smart_enemy_solid(floor)) { left_edge = true; break; }
+    x += velocity_x;
+  }
+  if (!left_edge) return false;
+  int velocity_y = 0;
+  for (unsigned step = 0; step < 112; ++step) {
+    const int px = x >> 8, py = y >> 8, foot = py + 24;
+    if (!smart_enemy_metatile(px + 8, foot, &floor)) return false;
+    if (smart_enemy_solid(floor)) {
+      const int top = (foot / 16) * 16;
+      if (!velocity_y || top <= old_floor || top > smart_enemy_player_floor() + 16 ||
+          (py & 15) < 8 || (py & 15) > 12) return false;
+      // The complete native foot span must fit on the lower platform. This
+      // excludes an exposed one-pixel lip or a pit immediately under one foot.
+      for (unsigned point = 0; point < 3; ++point) {
+        if (!smart_enemy_metatile(px + 1 + (int)point * 7, top, &floor) || !smart_enemy_solid(floor)) return false;
+      }
+      if (landing_x) *landing_x = px;
+      if (landing_y) *landing_y = top;
+      return true;
+    }
+    const int lead = direction == DIR_RIGHT ? px + 16 : px;
+    if (!smart_enemy_metatile(lead, py + 4, &wall) || smart_enemy_solid(wall) ||
+        !smart_enemy_metatile(lead, py + 20, &wall) || smart_enemy_solid(wall)) return false;
+    y += velocity_y;
+    velocity_y += 0x3d;
+    if ((velocity_y >> 8) >= 3 && (velocity_y & 255) >= 128) velocity_y = 3 * 256;
+    x += velocity_x;
+  }
+  return false;
+}
+static bool smart_enemy_path(const u8 objoff, u8 direction) {
+  const int x = LOAD_16(Enemy_PageLoc[objoff], Enemy_X_Position[objoff]);
+  const int y = Enemy_Y_Position[objoff];
+  const int speed = Enemy_X_Speed[objoff];
+  const int step = ((speed < 0 ? -speed : speed) + 15) / 16;
+  const int lead = direction == DIR_RIGHT ? x + 16 + step : x - step;
+  u8 floor, wall;
+  if (!smart_enemy_metatile(lead, y + 24, &floor)) return false;
+  if (!smart_enemy_metatile(lead, y + 20, &wall) || smart_enemy_solid(wall)) return false;
+  return smart_enemy_solid(floor) || smart_enemy_drop(objoff, direction, x, NULL, NULL);
+}
+// A player under a long platform cannot be reached by just comparing X. Walk
+// to the nearest usable exit, weighted by the remaining distance to that player.
+// No search crosses a wall or an unknown tile; work is bounded to 32 cells.
+static int smart_enemy_exit_cost(const u8 objoff, u8 direction) {
+  const int x = LOAD_16(Enemy_PageLoc[objoff], Enemy_X_Position[objoff]);
+  const int y = Enemy_Y_Position[objoff], sign = direction == DIR_RIGHT ? 1 : -1;
+  const int player_x = LOAD_16(Player_PageLoc, Player_X_Position);
+  u8 floor, wall;
+  for (int distance = 0; distance <= 256; distance += 8) {
+    const int candidate = x + distance * sign;
+    const int lead = direction == DIR_RIGHT ? candidate + 17 : candidate - 1;
+    if (!smart_enemy_metatile(lead, y + 20, &wall) || smart_enemy_solid(wall) ||
+        !smart_enemy_metatile(lead, y + 24, &floor)) return -1;
+    if (!smart_enemy_solid(floor)) {
+      int landing_x, landing_y;
+      if (!smart_enemy_drop(objoff, direction, candidate, &landing_x, &landing_y)) return -1;
+      const int delta = landing_x - player_x;
+      const int vertical = landing_y - smart_enemy_player_floor();
+      return distance + (delta < 0 ? -delta : delta) + (vertical < 0 ? -vertical : vertical) * 2;
+    }
+  }
+  return -1;
+}
+// False means wait on a too-small safe island. It does not zero the enemy's
+// saved speed; the original movement resumes unchanged when a path is safe.
+static bool smart_enemy_decide(const u8 objoff) {
+  if (!SMB1_ONLY || !SMB_smart_enemies(SMB_STATE) || OperMode != OM_UNK_1 ||
+      OperMode_Task != OMT_1_UNK_3 || GameEngineSubroutine != GR_UNK_8 || AreaType == AREA_WATER ||
+      Enemy_Flag[objoff] != 1 || Enemy_State[objoff] != ACTOR_STATE_NORMAL ||
+      Enemy_Y_HighPos[objoff] != 1 || Enemy_Y_Speed[objoff] != 0 || Enemy_Y_MoveForce[objoff] != 0 ||
+      Enemy_X_Speed[objoff] == 0) return true;
+  const u8 actor = Enemy_ID[objoff];
+  if (actor != A_GOOMBA && actor != A_GREEN_KOOPA && actor != A_RED_KOOPA_GREENLIKE &&
+      actor != A_RED_KOOPA && actor != A_BUZZY_BEETLE && actor != A_SPINY) return true;
+  const int x = LOAD_16(Enemy_PageLoc[objoff], Enemy_X_Position[objoff]);
+  const int y = Enemy_Y_Position[objoff];
+  u8 support;
+  // A real airborne/falling enemy is left to native gravity. No invisible
+  // floor, hovering over a pit, teleports or rescue after an actual fall.
+  if (!smart_enemy_metatile(x + 8, y + 24, &support) || !smart_enemy_solid(support)) return true;
+  const u8 current = Enemy_X_Speed[objoff] < 0 ? DIR_LEFT : DIR_RIGHT;
+  const u8 opposite = current ^ 3;
+  const bool current_safe = smart_enemy_path(objoff, current);
+  const bool opposite_safe = smart_enemy_path(objoff, opposite);
+  u8 direction = current;
+  if (!current_safe) {
+    if (!opposite_safe) return false;
+    direction = opposite;
+  } else if (((FrameCounter + objoff * 7) & 31) == 0) {
+    // A half-second decision cadence avoids oscillating against a wall or
+    // under a jumping player. Edge safety itself is checked every tick.
+    const int delta = (int)LOAD_16(Player_PageLoc, Player_X_Position) - x;
+    u8 wanted = delta < -12 ? DIR_LEFT : delta > 12 ? DIR_RIGHT : current;
+    if (smart_enemy_player_below(objoff)) {
+      const int right = smart_enemy_exit_cost(objoff, DIR_RIGHT), left = smart_enemy_exit_cost(objoff, DIR_LEFT);
+      if (right >= 0 && (left < 0 || right < left)) wanted = DIR_RIGHT;
+      else if (left >= 0 && (right < 0 || left < right)) wanted = DIR_LEFT;
+    }
+    if (wanted == opposite && opposite_safe) direction = opposite;
+  }
+  if (direction != current) Enemy_X_Speed[objoff] = -Enemy_X_Speed[objoff];
+  Enemy_MovingDir[objoff] = direction;
+  return true;
+}
+
+// A wide viewport can activate a pack with one of its spacing offsets inside
+// a pipe. The native two side probes then reverse it forever. Repair the
+// invalid placement before the first sprite or contact, including on resume.
+static bool pipe_wall(u8 tile) {
+  return (tile >= MT_PIPE_VERT_WARP_TL && tile <= MT_PIPE_VERT_UNDER_R) ||
+         (tile >= MT_PIPE_SIDEWAYS_TL && tile <= MT_PIPE_CONNECTED_B);
+}
+
+static void release_pipe_walker(const u8 slot) {
+  if (!SMB1_ONLY || OperMode != OM_UNK_1 || TimerControl || Enemy_Flag[slot] != 1 ||
+      Enemy_Y_HighPos[slot] != 1 || Enemy_State[slot] > ACTOR_STATE_FALLING) return;
+  const u8 id = Enemy_ID[slot];
+  if (id != A_GOOMBA && id != A_GREEN_KOOPA && id != A_RED_KOOPA_GREENLIKE &&
+      id != A_RED_KOOPA && id != A_BUZZY_BEETLE && id != A_SPINY) return;
+  const int x = LOAD_16(Enemy_PageLoc[slot], Enemy_X_Position[slot]);
+  const int y = Enemy_Y_Position[slot];
+  const int center = x + 8;
+  u8 tile;
+  // One side touching a pipe can turn and walk out normally. Both actual
+  // side probes from DoEnemySideCheck must be blocked to reverse every tick.
+  if (!smart_enemy_metatile(x, y + 20, &tile) || !pipe_wall(tile) ||
+      !smart_enemy_metatile(x + 16, y + 20, &tile) || !pipe_wall(tile) ||
+      !smart_enemy_metatile(center, y + 9, &tile) || !pipe_wall(tile)) return;
+
+  const int origin = center / 16 * 16;
+  int best = -1, best_cost = 0;
+  for (int dir = -1; dir <= 1; dir += 2) {
+    // Cross only the contiguous pipe. The first other obstruction or gap is
+    // a hard boundary. A tile-wide aligned cell covers the whole 16px actor.
+    for (int i = 1; i <= 4; ++i) {
+      const int next = origin + dir * i * 16;
+      if (!smart_enemy_metatile(next + 8, y + 20, &tile)) break;
+      if (pipe_wall(tile)) continue;
+      if (smart_enemy_solid(tile) ||
+          !smart_enemy_metatile(next + 8, y + 9, &tile) || smart_enemy_solid(tile) ||
+          !smart_enemy_metatile(next + 8, y + 24, &tile) || !smart_enemy_solid(tile)) break;
+
+      int cost = next > x ? next - x : x - next;
+      // Leave the other members of the pack room to move apart.
+      for (u8 other = 0; other < 5; ++other) {
+        if (other == slot || Enemy_Flag[other] != 1 ||
+            Enemy_Y_HighPos[other] != 1 || Enemy_Y_Position[other] != y) continue;
+        int gap = (int)LOAD_16(Enemy_PageLoc[other], Enemy_X_Position[other]) - next;
+        if (gap > -16 && gap < 16) cost += 80;
+      }
+      if (best < 0 || cost < best_cost) { best = next; best_cost = cost; }
+      break;
+    }
+  }
+  if (best < 0) return;
+  Enemy_PageLoc[slot] = (u8)(best >> 8);
+  Enemy_X_Position[slot] = (u8)best;
+  const bool right = best > x;
+  Enemy_MovingDir[slot] = right ? DIR_RIGHT : DIR_LEFT;
+  if ((Enemy_X_Speed[slot] < 0) == right) Enemy_X_Speed[slot] = -Enemy_X_Speed[slot];
+}
+
 // SMB:c8e0
 // SM2MAIN:9515
 // Signature: [X] -> []
 void RunNormalEnemies(const u8 objoff) {
+  release_pipe_walker(objoff);
   Enemy_SprAttrib[objoff] = 0;
   GetEnemyOffscreenBits(objoff);
   RelativeEnemyPosition(objoff);
@@ -6210,7 +6426,7 @@ void RunNormalEnemies(const u8 objoff) {
   EnemyToBGCollisionDet(objoff);
   EnemiesCollision(objoff);
   PlayerEnemyCollision(objoff);
-  if (TimerControl == 0) {
+  if (TimerControl == 0 && smart_enemy_decide(objoff)) {
     EnemyMovementSubs(objoff);
   }
   OffscreenBoundsCheck(objoff);
@@ -8618,7 +8834,7 @@ void PlayerEnemyCollision(const u8 objoff) {
 // SM2MAIN:a587
 // Signature: [] -> []
 void InjurePlayer(void) {
-  if (InjuryTimer != 0) {
+  if ((SMB1_ONLY && SMB_immortal(SMB_STATE)) || InjuryTimer != 0) {
     return;
   }
 
@@ -9677,6 +9893,17 @@ void SetStun2(const u8 param_1) {
 // Signature: [X] -> []
 void ChkForRedKoopa(const u8 objoff) {
   if (actor_is(objoff, A_RED_KOOPA) && (actor_state_get_raw(objoff) == 0)) {
+    // Enhanced pursuit may intentionally step down to a proven lower surface;
+    // ordinary red Koopas still perform their original unconditional edge turn.
+    if (SMB1_ONLY && SMB_smart_enemies(SMB_STATE) && OperMode == OM_UNK_1 &&
+        OperMode_Task == OMT_1_UNK_3 && GameEngineSubroutine == GR_UNK_8 && AreaType != AREA_WATER &&
+        Enemy_Flag[objoff] == 1 && Enemy_Y_HighPos[objoff] == 1 && TimerControl == 0 &&
+        smart_enemy_drop(objoff, Enemy_X_Speed[objoff] < 0 ? DIR_LEFT : DIR_RIGHT,
+          LOAD_16(Enemy_PageLoc[objoff], Enemy_X_Position[objoff]), NULL, NULL)) {
+      actor_state_set_raw(objoff, ACTOR_STATE_FALLING);
+      DoEnemySideCheck(objoff);
+      return;
+    }
     // Inlined: ChkForBump_HammerBroJ
 
     // Turn the enemy around
@@ -11274,6 +11501,9 @@ void SprObjectOffscrChk(const u8 objoff) {
 // Signature: [X] -> []
 void DrawBlock(const u8 objoff) {
   const u8 sproff = Block_SprDataOffset[objoff];
+  // RelativeBlockPosition also visits the lower fragment pair. An intact
+  // block uses its own world page for all four sprite X coordinates.
+  smb_viewport_origin(9 + objoff);
 
   {
     // Inlined: DrawOneSpriteRow

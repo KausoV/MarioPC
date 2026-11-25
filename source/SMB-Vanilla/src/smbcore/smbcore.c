@@ -206,6 +206,26 @@ void SMB_start_on_level(struct SMB_state *state, u8 world, u8 level) {
 
 int SMB_which_game(const struct SMB_state *state) { return state->which_game; }
 
+void SMB_set_immortal(struct SMB_state *state, bool enabled) {
+  if (state) state->immortal = enabled;
+}
+bool SMB_immortal(const struct SMB_state *state) {
+  return state && state->immortal;
+}
+void SMB_set_no_timer(struct SMB_state *state, bool enabled) {
+  if (state) state->no_timer = enabled;
+}
+bool SMB_no_timer(const struct SMB_state *state) {
+  return state && state->no_timer;
+}
+void SMB_set_smart_enemies(struct SMB_state *state, bool enabled) {
+  if (state) state->smart_enemies = enabled;
+}
+bool SMB_smart_enemies(const struct SMB_state *state) {
+  return state && state->smart_enemies;
+}
+
+
 u8 *SMB_ram(struct SMB_state *state) { return state->rammem; }
 
 u8 *SMB_ppuram(struct SMB_state *state) { return state->ppuram; }
@@ -360,11 +380,7 @@ void draw_graphics(const struct sprite sprites[64]) {
       for (unsigned row = 0; row < 13; ++row) {
         u8 tiles[4], palette, collision;
         if (!SMB_viewport_cell(SMB_STATE, column, row, tiles, &palette, &collision)) continue;
-        bool bumped = false;
-        for (unsigned slot = 0; slot < 2; ++slot)
-          bumped |= SMB_STATE->rammem[0x26 + slot] != 0 &&
-            SMB_STATE->backtrack.block_columns[slot] == column &&
-            SMB_STATE->rammem[0x3e4 + slot] / 16 == row;
+        const bool bumped = SMB_viewport_block_bumped(SMB_STATE, column, row);
         for (unsigned t = 0; t < 4; ++t) {
           struct SMB_tile tile = {0};
           tile.x = (int)(column * 16 + (t >= 2 ? 8 : 0)) - (int)camera;
@@ -706,10 +722,7 @@ static void backtrack_restore_ppu(struct SMB_state *state) {
     unsigned nt = 0x2000 + (((unsigned)column & 16) ? 0x400 : 0);
     for (unsigned y = 0; y < 13; ++y) {
       unsigned ty = (y + 2) * 2, p = nt + ty * 32 + x;
-      bool bumped = false;
-      for (unsigned slot = 0; slot < 2; ++slot)
-        bumped |= state->rammem[0x26 + slot] != 0 && b->block_columns[slot] == column &&
-          state->rammem[0x3e4 + slot] / 16 == y;
+      const bool bumped = SMB_viewport_block_bumped(state, (unsigned)column, y);
       // The moving native block sprite owns a bumped cell until its animation
       // finishes. Keep this temporary hole out of persistent map history.
       state->ppuram[p] = bumped ? 0x24 : c->tiles[y][0];
@@ -886,6 +899,13 @@ void SMB_set_viewport_width(struct SMB_state *state, int width) {
     memcpy(state->viewport.latched_origins, state->viewport.sprite_origins, sizeof(state->viewport.sprite_origins));
     memcpy(state->viewport.latched_valid, state->viewport.sprite_valid, sizeof(state->viewport.sprite_valid));
   }
+}
+bool SMB_viewport_block_bumped(const struct SMB_state *state, unsigned column, unsigned row) {
+  if (!state) return false;
+  for (unsigned slot = 0; slot < 2; ++slot)
+    if (state->rammem[0x26 + slot] && state->backtrack.block_columns[slot] == column &&
+        state->rammem[0x3e4 + slot] / 16 == row) return true;
+  return false;
 }
 bool SMB_viewport_cell(const struct SMB_state *state, unsigned column, unsigned row,
                        u8 tiles[4], u8 *palette, u8 *collision) {

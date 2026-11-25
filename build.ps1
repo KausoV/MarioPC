@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateRange(1, 64)]
     [int]$Jobs = 4
@@ -61,7 +61,7 @@ Invoke-CheckedNative -Command $ctestPath -Arguments @(
     '-C', 'Release'
 )
 
-foreach ($artifact in @('MarioPC.exe', 'SDL3.dll')) {
+foreach ($artifact in @('Iskra.exe', 'SDL3.dll')) {
     $sourcePath = Join-Path (Join-Path $buildRoot 'Release') $artifact
     if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
         throw "Build succeeded, but the required runtime file is missing: $sourcePath"
@@ -70,6 +70,6 @@ foreach ($artifact in @('MarioPC.exe', 'SDL3.dll')) {
 }
 
 Write-Host ''
-Write-Host "Native Mario build and checks passed. Launch: $(Join-Path $projectRoot 'MarioPC.exe')"
+Write-Host "Iskra build and checks passed. Launch: $(Join-Path $projectRoot 'Iskra.exe')"
 Write-Host 'The game itself requires neither Python, the source ROM file, nor an Internet connection.'
 

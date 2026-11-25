@@ -98,23 +98,10 @@ void nativeTile(std::vector<unsigned char>& rgb,int width,const SMB_tile& tile) 
 bool nativeFallback(const Ram& ram,const Commands& tiles,bool enabled=true,bool player=false) {
     mario::CharacterRenderer renderer;prepare(renderer,36,256,enabled);auto expected=renderer.pixels();
     for(const auto& tile:tiles)nativeTile(expected,renderer.renderWidth(),tile);
-    renderer.prepareArmadilloEnemy(ram.data());draw(renderer,tiles,false,player);return renderer.pixels()==expected;
+    draw(renderer,tiles,false,player);return renderer.pixels()==expected;
 }
-void composite(std::vector<unsigned char>& rgb,int width,const std::vector<unsigned char>& rgba,
-               const Commands& tiles,bool mirror=false,bool raised=false) {
-    for(unsigned part=0;part<6;++part) {
-        if(tiles[part].tileidx==0xfc || tiles[part].y==0xf9)continue;
-        for(unsigned y=0;y<32;++y)for(unsigned x=0;x<32;++x) {
-            const int px=tiles[part].x*Scale+int(x),py=tiles[part].y*Scale+int(y);
-            if(px<0||px>=width||py<0||py>=960)continue;
-            unsigned sx=(part%2)*32+x,sy=(part/2)*32+y+(raised?8:0);
-            if(mirror)sx=63-sx;if(sy>=96)continue;
-            const auto from=(std::size_t(sy)*64+sx)*4,to=(std::size_t(py)*width+px)*3;
-            const unsigned alpha=rgba[from+3];
-            for(unsigned c=0;c<3;++c)rgb[to+c]=static_cast<unsigned char>(
-                (unsigned(rgba[from+c])*alpha+unsigned(rgb[to+c])*(255-alpha)+127)/255);
-        }
-    }
+void nativeCommands(std::vector<unsigned char>& rgb,int width,const Commands& tiles) {
+    for(const auto& tile:tiles)nativeTile(rgb,width,tile);
 }
 void png(const std::filesystem::path& path,const std::vector<unsigned char>& bytes,int width,int height) {
     auto* surface=SDL_CreateSurfaceFrom(width,height,SDL_PIXELFORMAT_RGB24,const_cast<unsigned char*>(bytes.data()),width*3);
@@ -277,14 +264,13 @@ void scoreTopShellTests() {
         for(unsigned part=2;part<6;++part) {
             const auto* cell=proof.match(tiles[part]);shell&=cell&&cell->shell&&cell->raisedShell&&cell->motionSpeed==0;
         }
-        check("genuine native stomp kick event"+std::to_string(steps[event])+" retains supplied shell body",shell);
+        check("experimental matcher for native stomp kick event"+std::to_string(steps[event])+" retains supplied shell body",shell);
         check("genuine event"+std::to_string(steps[event])+" leaves both floating score callbacks native",
             !proof.match(tiles[0])&&!proof.match(tiles[1]));
         mario::CharacterRenderer renderer;prepare(renderer);auto expected=renderer.pixels();
-        nativeTile(expected,renderer.renderWidth(),tiles[0]);nativeTile(expected,renderer.renderWidth(),tiles[1]);
-        composite(expected,renderer.renderWidth(),mario::armadilloEnemyShellAtlas(),tiles,false,true);
-        renderer.prepareArmadilloEnemy(ram.data());draw(renderer,tiles,true);
-        check("genuine event"+std::to_string(steps[event])+" independently composes native score with grounded shell",
+        nativeCommands(expected,renderer.renderWidth(),tiles);
+        draw(renderer,tiles,true);
+        check("genuine event"+std::to_string(steps[event])+" restores original native score and shell pixels",
             renderer.pixels()==expected);
         readonly&=ram==original;
     }
@@ -359,67 +345,54 @@ void compositionTests(const std::filesystem::path& output) {
     for(unsigned graphic:{0x0cu,0x12u,0x5au,0x60u,0x66u,0x6cu})for(unsigned direction:{1u,2u}) {
         auto ram=actorRam(0,graphic,1,direction==2);ram[0x46]=static_cast<unsigned char>(direction);const auto tiles=commands(ram);
         mario::CharacterRenderer renderer;prepare(renderer);auto expected=renderer.pixels();
-        const bool shell=graphic>=0x5a,raised=graphic>=0x66;
-        composite(expected,renderer.renderWidth(),mario::armadilloEnemyFrame(36,shell),tiles,direction==1,raised);
-        renderer.prepareArmadilloEnemy(ram.data());draw(renderer,tiles,true);exact&=renderer.pixels()==expected;
-        if(direction==2&&graphic==0x0c)png(output/"armadillo-in-world.png",renderer.pixels(),renderer.renderWidth(),960);
-        if(direction==2&&graphic==0x66)png(output/"armadillo-shell.png",renderer.pixels(),renderer.renderWidth(),960);
+        nativeCommands(expected,renderer.renderWidth(),tiles);
+        draw(renderer,tiles,true);exact&=renderer.pixels()==expected;
+        if(direction==2&&graphic==0x0c)png(output/"native-koopa-in-world.png",renderer.pixels(),renderer.renderWidth(),960);
+        if(direction==2&&graphic==0x66)png(output/"native-koopa-shell.png",renderer.pixels(),renderer.renderWidth(),960);
     }
-    check("walking shell blinking and wholeprofile directions match independent RGBA composition",exact);
+    check("production rollback restores native walking shell blinking and both directions byte exactly",exact);
     bool clipping=true;
     for(int origin:{-8,-4,252,328,506})for(int top:{-1,224,250}) {
         const auto ram=actorRam(0,0x0c,1,true,origin,top);const auto tiles=commands(ram,0,origin);
         mario::CharacterRenderer renderer;prepare(renderer,36,origin>256?512:256);auto expected=renderer.pixels();
-        composite(expected,renderer.renderWidth(),mario::armadilloEnemyFrame(36),tiles);
-        renderer.prepareArmadilloEnemy(ram.data());draw(renderer,tiles,true);clipping&=renderer.pixels()==expected;
+        nativeCommands(expected,renderer.renderWidth(),tiles);
+        draw(renderer,tiles,true);clipping&=renderer.pixels()==expected;
     }
-    check("wrapped coordinates clipping and wider views preserve exact visible slices",clipping);
+    check("production native Koopa keeps original clipping and wider viewport coordinates",clipping);
     auto ram=actorRam(0,0x0c,1,true,72,96,0,244);ram[0x6e4]=40;
     check("complete actor grid wraps OAM without crossing player ownership",matches(ram,commands(ram))==6);
     bool hidden=true;
     for(unsigned mask=1;mask<64;++mask) {
         ram=actorRam();for(unsigned part=0;part<6;++part)if(mask&(1u<<part))ram[0x200+64+part*4]=0xf8;
         const auto tiles=commands(ram);mario::CharacterRenderer renderer;prepare(renderer);auto expected=renderer.pixels();
-        composite(expected,renderer.renderWidth(),mario::armadilloEnemyFrame(36),tiles);
-        renderer.prepareArmadilloEnemy(ram.data());draw(renderer,tiles,true);hidden&=renderer.pixels()==expected;
+        nativeCommands(expected,renderer.renderWidth(),tiles);
+        draw(renderer,tiles,true);hidden&=renderer.pixels()==expected;
     }
-    check("all63 hidden cell masks preserve native partial artwork",hidden);
+    check("production native Koopa keeps all63 hidden cell masks byte exactly",hidden);
     ram=actorRam();const auto tiles=commands(ram);bool occlusion=true;
     SMB_tile block{};block.tileidx=0x153;block.paletteidx=3;block.x=76;block.y=108;block.extra_type=TILE_TYPE_BG;
     for(bool front:{false,true}) {
         mario::CharacterRenderer renderer;prepare(renderer);auto expected=renderer.pixels();
         if(!front)nativeTile(expected,renderer.renderWidth(),block);
-        composite(expected,renderer.renderWidth(),mario::armadilloEnemyFrame(36),tiles);
+        nativeCommands(expected,renderer.renderWidth(),tiles);
         if(front)nativeTile(expected,renderer.renderWidth(),block);
-        renderer.prepareArmadilloEnemy(ram.data());if(!front)renderer.drawTile(block);draw(renderer,tiles);
+        if(!front)renderer.drawTile(block);draw(renderer,tiles);
         if(front)renderer.drawTile(block);occlusion&=renderer.pixels()==expected;
     }
     check("native block priority and callback draw order remain exact",occlusion);
     bool stopped=true;
     for(unsigned speed:{0u,8u,12u}) {
         ram=actorRam();ram[0x58]=static_cast<unsigned char>(-int(speed));mario::CharacterRenderer renderer;prepare(renderer);
-        auto expected=renderer.pixels();composite(expected,renderer.renderWidth(),mario::armadilloEnemyFrame(36,false,speed),commands(ram));
-        renderer.prepareArmadilloEnemy(ram.data());draw(renderer,commands(ram));stopped&=renderer.pixels()==expected;
+        auto expected=renderer.pixels();nativeCommands(expected,renderer.renderWidth(),commands(ram));
+        draw(renderer,commands(ram));stopped&=renderer.pixels()==expected;
     }
-    check("compositor samples stopped normal and hardmode gait independently",stopped);
+    check("production native Koopa keeps original pixels at stopped normal and hard speeds",stopped);
     ram=actorRam();ram[0x1e]=0x20;ram[0x58]=0xf4;
     mario::CharacterRenderer defeated;prepare(defeated);auto deadExpected=defeated.pixels();
-    composite(deadExpected,defeated.renderWidth(),mario::armadilloEnemyAtlas(0),commands(ram));
-    defeated.prepareArmadilloEnemy(ram.data());draw(defeated,commands(ram));
-    check("actual defeated compositor freezes source pose without changing native orientation",defeated.pixels()==deadExpected);
-    auto lowestDrawn=[](unsigned graphic,int originY) {
-        const auto fixture=actorRam(0,graphic,1,true,72,originY);mario::CharacterRenderer renderer;prepare(renderer);
-        const auto background=renderer.pixels();renderer.prepareArmadilloEnemy(fixture.data());draw(renderer,commands(fixture));
-        int bottom=-1;
-        for(int y=0;y<960;++y)for(int x=72*4;x<88*4;++x) {
-            const auto at=(std::size_t(y)*renderer.renderWidth()+x)*3;
-            if(!std::equal(background.begin()+at,background.begin()+at+3,renderer.pixels().begin()+at))bottom=y;
-        }
-        return bottom;
-    };
-    const auto walkBottom=lowestDrawn(0x0c,96);
-    check("stomp and kicked shell retain walking floor contact despite native two pixel OAM shift",
-        walkBottom>=0&&lowestDrawn(0x66,98)==walkBottom&&lowestDrawn(0x6c,98)==walkBottom);
+    nativeCommands(deadExpected,defeated.renderWidth(),commands(ram));
+    draw(defeated,commands(ram));
+    check("production native defeated Koopa keeps its original orientation and CHR pixels",defeated.pixels()==deadExpected);
+
 }
 void eraseAndClockTests() {
     bool inactiveNative=true,expired=true;
@@ -432,14 +405,18 @@ void eraseAndClockTests() {
     check("erased actor IDs lose provenance and every shared Koopa family remains native",inactiveNative);
     check("native OAM clear expires erased actor proofs",expired);
     const auto ram=actorRam();const auto tiles=commands(ram);mario::CharacterRenderer renderer,fresh;
+    // An independently prepared experimental matcher has no hook into the
+    // production renderer; only the original CHR may reach the player.
+    mario::ArmadilloEnemyPresentation experimental;experimental.prepare(ram.data());
+    check("retained experimental asset matcher cannot replace production native Koopa",nativeFallback(ram,tiles));
     auto render=[&](mario::CharacterRenderer& target,std::uint64_t tick) {
-        prepare(target,tick);target.prepareArmadilloEnemy(ram.data());draw(target,tiles);return target.pixels();
+        prepare(target,tick);draw(target,tiles);return target.pixels();
     };
     const auto saved=render(renderer,89);
-    check("paused scene counter retains exact supplied walking phase",saved==render(renderer,89));
+    check("paused scene retains exact native Koopa pixels",saved==render(renderer,89));
     check("fresh renderer reconstructs saved phase without new save state",saved==render(fresh,89));
     bool continued=true;for(unsigned step:{1u,3u,9u,80u})continued&=render(renderer,89+step)==render(fresh,89+step);
-    check("restored walking phase continues exactly from the saved scene clock",continued);
+    check("restored native Koopa remains exact for all existing scene clocks",continued);
 }
 } // namespace
 int main(int argc,char** argv) {
@@ -448,7 +425,7 @@ int main(int argc,char** argv) {
         std::filesystem::create_directories(output);
         atlasTests();ownershipTests();directionAndStateTests();scoreTopShellTests();otherActorsTests();compositionTests(output);eraseAndClockTests();
         std::ofstream report(output/"armadillo-enemy-checks.json");
-        report<<"{\n  \"checks\": "<<checks.size()<<",\n  \"failures\": "<<failures<<",\n  \"results\": [\n";
+        report<<"{\n  \"production_replacement\": false,\n  \"production_style\": \"native_green_koopa\",\n  \"experimental_art_assets_retained\": true,\n  \"checks\": "<<checks.size()<<",\n  \"failures\": "<<failures<<",\n  \"results\": [\n";
         for(unsigned i=0;i<checks.size();++i)report<<"    {\"name\": \""<<checks[i].name<<"\", \"passed\": "
             <<(checks[i].passed?"true":"false")<<"}"<<(i+1<checks.size()?",":"")<<'\n';
         report<<"  ]\n}\n";std::cout<<"RESULT "<<checks.size()<<" checks, "<<failures<<" failures\n";return failures?1:0;

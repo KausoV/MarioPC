@@ -139,8 +139,89 @@ struct Harness {
         require(message.empty(), "Reload saved menu settings"); return settings;
     }
 };
+void titleAndRules(const std::filesystem::path& directory) {
+    Harness h(directory / "title-rules.ini");
+    mario::PresentationHud title;
+    title.valid=true; title.mode=0; title.task=3; title.demoTimer=0x18; title.titlePlayers=0;
+    h.menu->setGameRunning(false);
+    h.menu->setPresentationHud(title,SDL_FRect{0,0,1280,720});
+    h.frame();h.frame();
+    auto* choices=h.find("##title_choices");
+    require(choices->GetID("Настройки")!=0,"Ready title contains an actual settings widget");
+    h.clickAt(ImVec2(choices->Pos.x+choices->Size.x*0.5f,choices->Pos.y+choices->Size.y*5.0f/6.0f));
+    require(h.menu->visible() && h.menu->selectedTab()==4,"Clicking title Settings opens the gameplay rules page");
+    require(h.menu->takeTitleActivity(),"Explicit mouse title choice is real navigation activity");
+    h.menu->close();h.frame();
+    auto filter=[&](SMB_buttons input) {
+        h.menu->filterTitleControls(input);
+        require(!input.u&&!input.d&&!input.a&&!input.b&&!input.start&&!input.select&&!input.l&&!input.r,
+                "Title navigation consumes native gameplay controls");
+    };
+    filter({});
+    require(!h.menu->takeTitleActivity(),"Idle title does not keep the native attract timer awake");
+    SMB_buttons down{};down.d=true;filter(down);
+    require(h.menu->takeTitleActivity()&&!h.menu->takeTitleActivity(),"Only real navigation activity is handed off once");
+    filter(down);
+    require(!h.menu->takeTitleActivity(),"Held direction does not repeatedly reset title idle time");
+    filter({});
+    SMB_buttons accept{};accept.a=true;filter(accept);
+    h.takeAction(mario::MenuAction::StartGame,"One down edge selects two players without repeating while held");
+    require(h.menu->takeTitlePlayers()==1 && h.menu->takeTitlePlayers()==-1,"Title player count is handed to the application exactly once");
+    filter({});filter(down);filter({});filter(accept);
+    require(h.menu->visible() && h.menu->selectedTab()==4,"D-pad Down and jump/A enter Settings from the third title row");
+    h.takeAction(mario::MenuAction::None,"Selecting Settings does not also request a game start");
+    h.menu->close();h.frame();
+    SMB_buttons run{};run.b=true;
+    filter(run);
+    auto unlocked=title;unlocked.worldSelectAvailable=true;
+    h.menu->setPresentationHud(unlocked,{0,0,1280,720});
+    SMB_buttons cycle=run;
+    h.menu->filterTitleControls(cycle);
+    require(cycle.b && !cycle.start, "Unlocked title delivers run to the native chapter selector");
+    auto chord=run;chord.r=true;filter(chord);
+    h.menu->open();filter(run);h.menu->close();
+    // A demo and actual gameplay keep their ordinary controls and never target title widgets.
+    for (int mode : {0,1}) {
+        auto ordinary=title;ordinary.mode=mode;ordinary.demoTimer=0;
+        h.menu->setPresentationHud(ordinary,SDL_FRect{0,0,1280,720});h.frame();
+        SMB_buttons input{};input.r=true;input.a=true;input.start=true;
+        h.menu->filterTitleControls(input);
+        require(input.r&&input.a&&input.start,"Gameplay and attract mode keep their native inputs unchanged");
+        require(!h.menu->visible()&&h.menu->takeAction()==mario::MenuAction::None,"Non-title inputs cannot open the title Settings choice");
+    }
+    h.menu->setPresentationHud(title,SDL_FRect{0,0,1280,720});h.frame();h.frame();
+    h.menu->open(4);h.frame();h.frame();
+    auto* content=h.content();
+    h.click(content,content->GetID("Прохождение без таймера"));
+    require(!h.live.no_timer,"Gameplay checkbox stays staged until Apply");
+    h.menu->close();h.frame();
+    require(!h.live.no_timer&&!h.persisted().no_timer,"Closing gameplay settings discards an unconfirmed timer choice");
+    h.menu->open(4);h.frame();h.frame();
+    content=h.content();h.click(content,content->GetID("Прохождение без таймера"));
+    h.button("Применить");
+    require(h.live.no_timer&&h.persisted().no_timer,"Timer choice applies and persists through the real settings button");
+    content=h.content();h.click(content,content->GetID("##enemy_intelligence"));
+    ImGuiWindow* popup=nullptr;
+    for(auto* candidate:GImGui->Windows)if(candidate->Active&&std::strstr(candidate->Name,"##Combo_"))popup=candidate;
+    require(popup!=nullptr,"Enemy intelligence creates a real choice list");
+    h.key(SDL_SCANCODE_DOWN);h.key(SDL_SCANCODE_DOWN,false);
+    h.key(SDL_SCANCODE_RETURN);h.key(SDL_SCANCODE_RETURN,false);
+    require(!h.live.smart_enemies,"Higher intelligence remains staged until confirmed");
+    h.button("Сохранить и закрыть");
+    require(!h.menu->visible()&&h.live.smart_enemies&&h.persisted().smart_enemies,"Save and close persists higher intelligence");
+    h.menu->open(4);h.frame();h.frame();
+    h.button("Сбросить вкладку");
+    require(h.live.no_timer&&h.live.smart_enemies,"Reset gameplay tab remains staged until Apply");
+    h.button("Применить");
+    require(!h.live.no_timer&&!h.live.smart_enemies&&!h.persisted().no_timer&&!h.persisted().smart_enemies,
+            "Reset gameplay rules restores timed standard intelligence without changing controls");
+    h.menu->close();h.frame();
+}
 void closedGamepadRegression(const std::filesystem::path& directory) {
     Harness h(directory / "closed-gamepad-settings.ini");
+    mario::PresentationHud hudState;
+    hudState.valid=true; hudState.mode=1; hudState.task=3;
+    h.menu->setPresentationHud(hudState,{0,0,768,720});
     SDL_VirtualJoystickDesc descriptor; SDL_INIT_INTERFACE(&descriptor);
     descriptor.type = SDL_JOYSTICK_TYPE_GAMEPAD;
     descriptor.vendor_id = 0x1209; descriptor.product_id = 28;
@@ -224,6 +305,7 @@ int main(int argc, char** argv) {
         require(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD), "Initialize SDL dummy video and gamepads");
         const auto directory = argc > 1 ? std::filesystem::u8path(argv[1]) : std::filesystem::path("menu-checks-output");
         std::filesystem::create_directories(directory);
+        titleAndRules(directory);
         closedGamepadRegression(directory);
         if (argc > 2 && std::strcmp(argv[2], "--closed-gamepad-only") == 0) {
             SDL_Quit(); std::cout << "Mario closed-gamepad regression checks passed: " << checks << '\n'; return 0;
@@ -233,6 +315,28 @@ int main(int argc, char** argv) {
             h.menu->open(); h.frame(); h.frame();
             require(h.menu->visible() && h.menu->selectedTab() == 3, "Normal menu opens the game-actions page");
             h.snapshot("game-menu.bmp");
+            auto enterCode = [&](const char* code, bool useEnter) {
+                h.gameButton("##cheat_code");
+                SDL_Event text{};
+                text.type = SDL_EVENT_TEXT_INPUT;
+                text.text.windowID = SDL_GetWindowID(h.window);
+                text.text.text = code;
+                h.menu->handleEvent(text);
+                h.frame();
+                if (useEnter) {
+                    h.key(SDL_SCANCODE_RETURN);
+                    h.key(SDL_SCANCODE_RETURN, false);
+                } else h.gameButton("Ввести код");
+            };
+            enterCode("immortal", true);
+            h.takeAction(mario::MenuAction::None, "A partial code does not enable invulnerability");
+            h.menu->close(); h.frame(); h.menu->open(); h.frame(); h.frame();
+            enterCode(" ImMoRtALity ", false);
+            h.takeAction(mario::MenuAction::EnableImmortality, "Text entry and the submit button accept the complete code");
+            enterCode("immortality", true);
+            h.takeAction(mario::MenuAction::EnableImmortality, "Enter submits the code without resuming play");
+            require(h.menu->visible(), "Submitting the cheat keeps the world paused");
+
             h.gameButton("Сохранить игру");
             h.takeAction(mario::MenuAction::SaveGame, "Actual Save Game button requests a game save");
             require(h.menu->visible(), "Saving leaves the paused menu visible");

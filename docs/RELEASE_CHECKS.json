@@ -1,49 +1,47 @@
 {
-  "release": "v2026.11.23",
-  "source_build_date": "2026-10-14",
-  "package_prepared_date": "2026-11-23",
-  "executable_sha256": "bd3abdfda4739f68815c42e0b9c8d3ea68f2944f1d3bed426e5b0b7c1dff3021",
-  "executable_bytes": 14746112,
-  "sdl3_sha256": "2b4b128d8d510cc2d442693cf848c050d700d43dc667afe9e5fd82b0570d667e",
-  "fresh_portable_smoke": {
-    "process_exit": 0,
-    "frames": 300,
-    "native_simulation_ticks": 300,
-    "actual_window": [
-      1280,
-      720
+  "simulation": {
+    "stage_starts": 32,
+    "pipe_transitions_checked": [
+      "1-1 descending",
+      "1-2 sideways",
+      "1-1 emerging"
     ],
-    "viewport_native_width": 427,
-    "world_background": true,
-    "audio_initialized": true,
-    "only_runtime_binaries": [
-      "MarioPC.exe",
-      "SDL3.dll"
-    ],
-    "settings_and_saves_isolated": true,
-    "restricted_PATH": true,
-    "external_sources_or_assets_required": false
+    "finish_sample_ticks": [
+      8,
+      56,
+      82,
+      165,
+      193,
+      211
+    ]
   },
-  "historical_matching_executable_checks": {
-    "date": "2026-10-14",
-    "ctest_groups": 19,
-    "ctest_assertions": 2209,
-    "frontend_assertions": 1788,
-    "reported_failures": 0,
-    "physical_gamepad_tested": false,
-    "full_manual_playthrough": false
+  "sprites": {
+    "source": "https://huggingface.co/datasets/Angais/pixel-art-atlas-1.4m",
+    "revision": "bf78f8c8cbafa6d07718111a94d41e2dd79ddaa7",
+    "verified": 16
   },
-  "source_copy": {
-    "native_frontend_assets_and_generated_data_byte_exact": true,
-    "generator_default_paths_adjusted": [
-      "tools/build_armadillo_assets.py",
-      "tools/build_camel_enemy_assets.py",
-      "tools/build_coin_assets.py",
-      "tools/build_flower_assets.py",
-      "tools/build_mushroom_assets.py",
-      "tools/build_realistic_character.py"
-    ],
-    "historical_large_diagnostics_excluded": true
+  "generated_paintings": {
+    "woodland_entries": 3,
+    "forest_props": 10,
+    "highlands": 14,
+    "embedded": true,
+    "finish_landmarks": 4,
+    "chapter_opening": 1
   },
-  "local_project_map_links_verified": 23
+  "old_and_new_save_continuation": true,
+  "chapter_stories": 32,
+  "tested_aspects": {
+    "4:3": 320,
+    "16:9": 427,
+    "21:9": 512
+  },
+  "ctest_passed": 23,
+  "portable": {
+    "zip_sha256": "df79f44505bece64fe2a231b4fbf49d9a6f430362c12608913aef03a40b5d339",
+    "exe_sha256": "b9a746743272525f28158075521cabafcb0d6853aef54d253e0ed03091a0b864",
+    "frames": 310,
+    "audio": true,
+    "mean_frame_work_ms": 1.88131,
+    "p95_frame_work_ms": 2.6764
+  }
 }

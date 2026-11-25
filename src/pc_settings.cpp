@@ -152,7 +152,7 @@ Settings loadSettings(const std::filesystem::path& path, std::string& message) {
             else section = trim(line.substr(1, line.size() - 2));
             continue;
         }
-        if (section != "mario_pc" && section != "bindings" && !section.empty()) continue;
+        if (section != "iskra" && section != "mario_pc" && section != "bindings" && !section.empty()) continue;
         const auto separator = line.find('=');
         if (separator == std::string::npos) { invalid = true; continue; }
         const auto key = trim(line.substr(0, separator));
@@ -204,6 +204,8 @@ Settings loadSettings(const std::filesystem::path& path, std::string& message) {
         } else if (key == "scaling") intField(result.scaling, 0, 2);
         else if (key == "filter") intField(result.filter, 0, 1);
         else if (key == "vsync") boolField(result.vsync);
+        else if (key == "no_timer") boolField(result.no_timer);
+        else if (key == "smart_enemies") boolField(result.smart_enemies);
         else if (key == "deadzone") intField(result.deadzone, 0, 95);
         else if (key == "stick") boolField(result.stick);
         else if (key == "gamepad_guid") {
@@ -234,14 +236,17 @@ bool saveSettings(const std::filesystem::path& path, Settings settings, std::str
         std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
         output.imbue(std::locale::classic());
         if (!output) { error = "Не удалось записать файл настроек."; return false; }
-        output << "# Mario PC: UTF-8; scancodes and SDL gamepad buttons\n[mario_pc]\nversion=1\n"
+        output << "# Iskra controls and display\n[iskra]\nversion=1\n"
                << "monitor=" << settings.monitor << '\n'
                << "monitor_name=" << escaped(settings.monitor_name) << '\n'
                << "screen_mode=" << settings.screen_mode << '\n'
                << "width=" << settings.width << '\n' << "height=" << settings.height << '\n'
                << "refresh_rate=" << std::setprecision(std::numeric_limits<float>::max_digits10) << settings.refresh_rate << '\n'
                << "scaling=" << settings.scaling << '\n' << "filter=" << settings.filter << '\n'
-               << "vsync=" << (settings.vsync ? 1 : 0) << '\n' << "deadzone=" << settings.deadzone << '\n'
+               << "vsync=" << (settings.vsync ? 1 : 0) << '\n'
+               << "no_timer=" << (settings.no_timer ? 1 : 0) << '\n'
+               << "smart_enemies=" << (settings.smart_enemies ? 1 : 0) << '\n'
+               << "deadzone=" << settings.deadzone << '\n'
                << "stick=" << (settings.stick ? 1 : 0) << '\n'
                << "gamepad_guid=" << settings.gamepad_guid << "\n\n[bindings]\n";
         for (int i = 0; i < ActionCount; ++i) {

@@ -95,17 +95,17 @@ void drawGlassPanel(ImDrawList* draw, const GlassBackdrop* backdrop, ImVec2 min,
     if (max.x <= min.x || max.y <= min.y) return;
     draw->PushClipRect(min, max, true);
     if (backdrop && backdrop->ready()) backdrop->image(draw, min, max, rounding, 0.88f * strength, 2.2f);
-    else draw->AddRectFilled(min, max, IM_COL32(37,62,91,220), rounding);
+    else draw->AddRectFilled(min, max, IM_COL32(46,38,59,231), rounding);
     draw->AddRectFilled(min, max, opacity(tint, strength), rounding);
     const float width = max.x - min.x, height = max.y - min.y;
     draw->AddRectFilledMultiColor(ImVec2(min.x+rounding,min.y+1), ImVec2(max.x-rounding,min.y+height*0.38f),
-        opacity(IM_COL32(216,238,255,66),strength), opacity(IM_COL32(180,221,255,27),strength), 0, 0);
-    draw->AddRect(ImVec2(min.x+0.7f,min.y+0.7f), ImVec2(max.x-0.7f,max.y-0.7f), opacity(IM_COL32(224,242,255,125),strength), rounding, 1.2f, ImDrawFlags_None);
-    draw->AddRect(ImVec2(min.x+2,min.y+2), ImVec2(max.x-2,max.y-2), opacity(IM_COL32(142,202,255,32),strength), std::max(0.0f,rounding-1), 1.0f, ImDrawFlags_None);
+        opacity(IM_COL32(230,214,253,31),strength), opacity(IM_COL32(201,169,234,12),strength), 0, 0);
+    draw->AddRect(ImVec2(min.x+0.7f,min.y+0.7f), ImVec2(max.x-0.7f,max.y-0.7f), opacity(IM_COL32(213,192,233,79),strength), rounding, 1.2f, ImDrawFlags_None);
+    draw->AddRect(ImVec2(min.x+2,min.y+2), ImVec2(max.x-2,max.y-2), opacity(IM_COL32(180,149,204,18),strength), std::max(0.0f,rounding-1), 1.0f, ImDrawFlags_None);
     draw->AddBezierCubic(ImVec2(min.x+rounding,min.y+2), ImVec2(min.x+width*.25f,min.y+1),
-        ImVec2(min.x+width*.40f,min.y+height*.10f), ImVec2(min.x+width*.70f,min.y+3), opacity(IM_COL32(255,255,255,125),strength), 1.3f);
+        ImVec2(min.x+width*.40f,min.y+height*.10f), ImVec2(min.x+width*.70f,min.y+3), opacity(IM_COL32(245,222,254,58),strength), 1.3f);
     draw->AddBezierCubic(ImVec2(max.x-rounding,max.y-2), ImVec2(max.x-width*.12f,max.y-1),
-        ImVec2(max.x-width*.25f,max.y-height*.12f), ImVec2(max.x-width*.42f,max.y-3), opacity(IM_COL32(185,226,255,61),strength), 1.0f);
+        ImVec2(max.x-width*.25f,max.y-height*.12f), ImVec2(max.x-width*.42f,max.y-3), opacity(IM_COL32(203,173,230,29),strength), 1.0f);
     draw->PopClipRect();
 }
 } // namespace mario

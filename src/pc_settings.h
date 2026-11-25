@@ -31,6 +31,8 @@ struct Settings {
     int scaling = 2; // 0: integer classic, 1: aspect classic, 2: wider world without distortion
     int filter = 0; // 0: nearest, 1: linear
     bool vsync = false;
+    bool no_timer = false;
+    bool smart_enemies = false;
     int deadzone = 30; // percent
     bool stick = true;
     std::string gamepad_guid; // empty: automatic

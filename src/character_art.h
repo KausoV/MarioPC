@@ -3,7 +3,6 @@
 #include "chibi_art.h"
 #include "world_background.h"
 #include "camel_enemy_art.h"
-#include "armadillo_enemy_art.h"
 #include <array>
 #include <cstddef>
 #include <vector>
@@ -53,8 +52,6 @@ public:
     void preparePowerups(const unsigned char* ram);
     // Only the complete native Goomba owner receives the supplied creature.
     void prepareCamelEnemy(const unsigned char* ram);
-    // Only native green Koopa owners receive the supplied armadillo.
-    void prepareArmadilloEnemy(const unsigned char* ram);
     void preparePlayer(const std::array<SMB_tile, 8>& sprites, bool luigi = false,
                        bool fire = false, bool swimming = false, bool moving = false,
                        const PlayerAnimation* animation = nullptr);
@@ -112,8 +109,6 @@ private:
     bool drawFlowerTile(const SMB_tile& tile);
     CamelEnemyPresentation camelEnemy_;
     bool drawCamelEnemyTile(const SMB_tile& tile);
-    ArmadilloEnemyPresentation armadilloEnemy_;
-    bool drawArmadilloEnemyTile(const SMB_tile& tile);
     std::array<SMB_tile, 8> playerSprites_{};
     int playerPose_ = -1, playerLegPose_ = -1;
     bool playerMirrored_ = false, playerLuigi_ = false, playerFire_ = false;

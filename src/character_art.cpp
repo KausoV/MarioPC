@@ -405,36 +405,8 @@ bool CharacterRenderer::drawCamelEnemyTile(const SMB_tile& tile) {
     }
     return true;
 }
-void CharacterRenderer::prepareArmadilloEnemy(const unsigned char* ram) {
-    armadilloEnemy_.prepare(scene_.enabled ? ram : nullptr);
-}
-bool CharacterRenderer::drawArmadilloEnemyTile(const SMB_tile& tile) {
-    if (!scene_.enabled) return false;
-    const auto* proof=armadilloEnemy_.match(tile);
-    if (!proof) return false;
-    if (proof->blank || tile.x>=nativeWidth_ || tile.x+8<=0 || tile.y>=240 || tile.y+8<=0) return true;
-    const auto& rgba=armadilloEnemyFrame(scene_.frame,proof->shell,proof->motionSpeed);
-    for (unsigned y=0;y<8*Scale;++y) for (unsigned x=0;x<8*Scale;++x) {
-        const int px=tile.x*Scale+int(x),py=tile.y*Scale+int(y);
-        if (px<0 || px>=renderWidth() || py<0 || py>=Height) continue;
-        unsigned sx=proof->sourceX+x,sy=proof->sourceY+y;
-        if (proof->mirrorArt) sx=ArmadilloEnemyArtWidth-1-sx;
-        // Stomped and kicked native shells draw two pixels lower. The original
-        // CHR ends two pixels earlier, so preserve the same ground contact.
-        if (proof->raisedShell) sy+=2*Scale;
-        if (sy>=ArmadilloEnemyArtHeight) continue;
-        const auto from=(std::size_t(sy)*ArmadilloEnemyArtWidth+sx)*4;
-        const unsigned alpha=rgba[from+3]; if (!alpha) continue;
-        const auto to=(std::size_t(py)*renderWidth()+px)*3;
-        for (unsigned channel=0;channel<3;++channel)
-            pixels_[to+channel]=static_cast<unsigned char>((unsigned(rgba[from+channel])*alpha+
-                unsigned(pixels_[to+channel])*(255-alpha)+127)/255);
-    }
-    return true;
-}
 void CharacterRenderer::beginFrame(bool deferBackdrop) {
     camelEnemy_.clear();
-    armadilloEnemy_.clear();
     for (auto& proof : flowerSprites_) proof = {};
     for (auto& proof : mushroomSprites_) proof = {};
     for (auto& proof : coinSprites_) proof = {};
@@ -633,7 +605,6 @@ void CharacterRenderer::drawTile(const SMB_tile& tile, bool is_player, bool, boo
     if (!is_player && drawFlowerTile(tile)) return;
     if (!is_player && drawMushroomTile(tile)) return;
     if (!is_player && drawCamelEnemyTile(tile)) return;
-    if (!is_player && drawArmadilloEnemyTile(tile)) return;
     if (decorativeTile(tile)) return;
     int slot = -1;
     if (is_player && playerPose_ >= 0 && tile.extra_type == TILE_TYPE_SPRITE) {

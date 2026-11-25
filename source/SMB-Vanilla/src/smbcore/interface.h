@@ -60,6 +60,8 @@ struct SMB_state {
   u8 patch_current_player;
   struct smb_backtrack_state backtrack;
   struct smb_viewport_state viewport;
+  // PC gameplay preferences; excluded from native snapshots.
+  bool no_timer, smart_enemies, immortal;
 };
 
 // The singleton SMB_state used during the SMB_tick() invocation. This is considered internal and should not be used by callers of the library.

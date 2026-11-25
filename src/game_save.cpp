@@ -62,7 +62,7 @@ unsigned lifeCount(unsigned char life) { return life == 255 ? 0 : unsigned(life)
 bool validateFile(const std::vector<unsigned char>& bytes, SaveInfo& info, std::string& error) {
     if (bytes.size() < HeaderBytes ||
         !std::equal(Magic.begin(), Magic.end(), bytes.begin())) {
-        error = "This file is not a Mario PC save."; return false;
+        error = "Некорректный файл сохранения."; return false;
     }
     if (get32(bytes.data() + 8) != 1 || get32(bytes.data() + 12) != HeaderBytes) {
         error = "This save uses an unsupported format version."; return false;

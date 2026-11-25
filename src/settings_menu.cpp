@@ -1,6 +1,7 @@
 #include "settings_menu.h"
 #include "glass_panel.h"
-#include "coin_art.h"
+#include "iskra_title_poster.h"
+#include "iskra_chapter_poster.h"
 #include "ui_font.h"
 #include "imgui.h"
 #include "backends/imgui_impl_sdl3.h"
@@ -12,8 +13,8 @@
 
 namespace mario {
 namespace {
-const ImVec4 Accent(1.0f, 0.76f, 0.19f, 1.0f);
-const ImVec4 Muted(0.60f, 0.65f, 0.73f, 1.0f);
+const ImVec4 Accent(1.0f, 0.84f, 0.54f, 1.0f);
+const ImVec4 Muted(0.73f, 0.68f, 0.81f, 1.0f);
 const ImVec4 Good(0.44f, 0.84f, 0.62f, 1.0f);
 const ImVec4 Warning(1.0f, 0.73f, 0.34f, 1.0f);
 bool videoChanged(const Settings& a, const Settings& b) {
@@ -55,19 +56,19 @@ void setupStyle() {
     s.WindowRounding = 22; s.ChildRounding = 14; s.FrameRounding = 12;
     s.PopupRounding = 18; s.GrabRounding = 9; s.TabRounding = 12;
     s.WindowBorderSize = 1; s.ChildBorderSize = 0; s.ScrollbarSize = 11;
-    s.Colors[ImGuiCol_WindowBg] = ImVec4(0.055f, 0.105f, 0.19f, 0.12f);
-    s.Colors[ImGuiCol_ChildBg] = ImVec4(0.15f, 0.27f, 0.40f, 0.14f);
-    s.Colors[ImGuiCol_PopupBg] = ImVec4(0.09f, 0.16f, 0.27f, 0.88f);
-    s.Colors[ImGuiCol_Border] = ImVec4(0.80f, 0.90f, 1.0f, 0.34f);
+    s.Colors[ImGuiCol_WindowBg] = ImVec4(0.085f, 0.075f, 0.13f, 0.72f);
+    s.Colors[ImGuiCol_ChildBg] = ImVec4(0.21f, 0.17f, 0.27f, 0.34f);
+    s.Colors[ImGuiCol_PopupBg] = ImVec4(0.13f, 0.12f, 0.20f, 0.98f);
+    s.Colors[ImGuiCol_Border] = ImVec4(0.75f, 0.63f, 0.84f, 0.35f);
     s.Colors[ImGuiCol_FrameBg] = ImVec4(0.15f, 0.18f, 0.23f, 1.0f);
     s.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.23f, 0.27f, 0.34f, 1.0f);
     s.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.28f, 0.31f, 0.38f, 1.0f);
     s.Colors[ImGuiCol_Button] = ImVec4(0.17f, 0.20f, 0.26f, 1.0f);
     s.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.27f, 0.31f, 0.39f, 1.0f);
     s.Colors[ImGuiCol_ButtonActive] = ImVec4(0.35f, 0.39f, 0.47f, 1.0f);
-    s.Colors[ImGuiCol_Header] = ImVec4(0.50f, 0.20f, 0.20f, 1.0f);
-    s.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.64f, 0.24f, 0.24f, 1.0f);
-    s.Colors[ImGuiCol_HeaderActive] = ImVec4(0.75f, 0.28f, 0.25f, 1.0f);
+    s.Colors[ImGuiCol_Header] = ImVec4(0.31f, 0.22f, 0.43f, 1.0f);
+    s.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.40f, 0.28f, 0.53f, 1.0f);
+    s.Colors[ImGuiCol_HeaderActive] = ImVec4(0.48f, 0.34f, 0.61f, 1.0f);
     s.Colors[ImGuiCol_CheckMark] = Accent; s.Colors[ImGuiCol_SliderGrab] = Accent;
     s.Colors[ImGuiCol_SliderGrabActive] = ImVec4(1.0f, 0.86f, 0.35f, 1.0f);
     s.Colors[ImGuiCol_Text] = ImVec4(0.94f, 0.95f, 0.98f, 1.0f);
@@ -86,9 +87,10 @@ struct SettingsMenu::Impl {
     Gamepads& gamepads;
     ImGuiContext* context = nullptr;
     GlassBackdrop backdrop;
-    SDL_Texture* coinTexture = nullptr;
-    unsigned coinUploadedFrame = ~0u;
-    bool coinTextureFailed = false;
+    SDL_Texture* titlePoster = nullptr;
+    bool posterRequested = false;
+    SDL_Texture* chapterPoster = nullptr;
+    bool chapterPosterRequested = false;
     PresentationHud presentationHud;
     SDL_FRect presentationDest{};
     Settings draft, previous;
@@ -97,6 +99,11 @@ struct SettingsMenu::Impl {
     bool openConfirmation = false, openCapture = false, statusError = false;
     bool saveAvailable = false, gameRunning = true, returnConfirmation = false, openReturnConfirmation = false;
     bool focusGameAction = false;
+    bool immortal = false;
+    char cheatCode[64]{};
+    bool titleWasReady = false, titleActivity = false;
+    int titleChoice = 0, pendingTitlePlayers = -1;
+    SMB_buttons previousTitleButtons{};
     MenuAction action = MenuAction::None;
     int tab = 0, vertices = 0;
     Uint64 deadline = 0, lastMonitorCheck = 0, navResumeAt = 0;
@@ -118,7 +125,8 @@ struct SettingsMenu::Impl {
         ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_Manual, nullptr, 0);
     }
     ~Impl() {
-        SDL_DestroyTexture(coinTexture);
+        SDL_DestroyTexture(titlePoster);
+        SDL_DestroyTexture(chapterPoster);
         if (pending) revert(); ImGui::SetCurrentContext(context);
         ImGui_ImplSDLRenderer3_Shutdown(); ImGui_ImplSDL3_Shutdown(); ImGui::DestroyContext(context);
     }
@@ -143,8 +151,9 @@ struct SettingsMenu::Impl {
         captureAction = -1; candidate = -1; conflicts.clear();
     }
     void open(int index) {
-        if (isOpen) { tab = std::clamp(index, 0, 3); focusGameAction = tab == 3; return; }
-        draft = live; tab = std::clamp(index, 0, 3); focusGameAction = tab == 3; action = MenuAction::None; monitors = displays(); lastMonitorCheck = SDL_GetTicks();
+        if (isOpen) { tab = std::clamp(index, 0, 4); focusGameAction = tab == 3; return; }
+        draft = live; tab = std::clamp(index, 0, 4); focusGameAction = tab == 3; action = MenuAction::None; monitors = displays(); lastMonitorCheck = SDL_GetTicks();
+        cheatCode[0] = 0;
         status.clear(); isOpen = true; quit = false; cancelCapture();
     }
     void close() {
@@ -203,10 +212,13 @@ struct SettingsMenu::Impl {
                 draft.bindings[a].primary = defaults.bindings[a].primary;
                 draft.bindings[a].secondary = defaults.bindings[a].secondary;
             }
-        } else {
+        } else if (tab == 2) {
             for (int a = 0; a < ActionCount; ++a) draft.bindings[a].pad = defaults.bindings[a].pad;
             draft.deadzone = defaults.deadzone; draft.stick = defaults.stick;
             draft.gamepad_guid = defaults.gamepad_guid; gamepads.select(draft.gamepad_guid);
+        } else if (tab == 4) {
+            draft.no_timer = defaults.no_timer;
+            draft.smart_enemies = defaults.smart_enemies;
         }
         message("Вкладка сброшена. Нажмите «Применить», чтобы сохранить.");
     }
@@ -258,6 +270,57 @@ struct SettingsMenu::Impl {
             return true;
         }
         return isOpen;
+    }
+    void activateTitleChoice(int choice) {
+        titleActivity = true;
+        titleChoice = std::clamp(choice,0,2);
+        if (titleChoice == 2) { gameRunning = false; open(4); }
+        else { pendingTitlePlayers = titleChoice; action = MenuAction::StartGame; }
+    }
+    void filterTitleControls(SMB_buttons& buttons) {
+        const auto current = buttons;
+        if (!presentationHud.titleVisible()) {
+            titleWasReady = false; previousTitleButtons = {};
+            return;
+        }
+        if (!titleWasReady) {
+            titleChoice = std::clamp(presentationHud.titlePlayers,0,1);
+            previousTitleButtons = {};
+            titleWasReady = true;
+        }
+        buttons = {};
+        if (!isOpen) {
+            const bool next = (current.d && !previousTitleButtons.d) ||
+                              (current.select && !previousTitleButtons.select);
+            const bool previous = current.u && !previousTitleButtons.u;
+            // The original title handles the unlocked chapter selector and its repeat timer.
+            // Forward B only by itself. Navigation and activation belong to the visible menu.
+            buttons.b = presentationHud.worldSelectAvailable && current.b &&
+                        !current.u && !current.d && !current.l && !current.r &&
+                        !current.a && !current.start && !current.select;
+            if (next != previous) { titleChoice = (titleChoice + (next ? 1 : 2)) % 3; titleActivity = true; }
+            if ((current.a && !previousTitleButtons.a) ||
+                (current.start && !previousTitleButtons.start)) activateTitleChoice(titleChoice);
+        }
+        previousTitleButtons = current;
+    }
+    void rulesTab() {
+        wrappedHint("Эти правила можно изменить до начала игры и во время паузы.");
+        ImGui::Spacing();
+        ImGui::TextColored(Accent, "%s", "Путь хранителя");
+        wrappedHint("Иди к маяку в конце каждой тропы. Удерживай прыжок, чтобы подняться выше. Набери разбег перед широким разрывом.");
+        ImGui::Spacing();
+        ImGui::Checkbox("Прохождение без таймера", &draft.no_timer);
+        wrappedHint(draft.no_timer ? "Время прохождения не ограничено." : "Уровень нужно пройти до окончания времени.");
+        ImGui::Spacing();
+        ImGui::TextUnformatted("ИИ противников");
+        int intelligence = draft.smart_enemies ? 1 : 0;
+        const char* choices[] = {"Стандартный", "Повышенный"};
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::Combo("##enemy_intelligence", &intelligence, choices, 2)) draft.smart_enemies = intelligence == 1;
+        wrappedHint(draft.smart_enemies ?
+            "Обитатели леса преследуют путника и ищут безопасный спуск." :
+            "Обитатели леса патрулируют привычные тропы.");
     }
     void screenTab() {
         const DisplayInfo* display = monitor();
@@ -404,11 +467,31 @@ struct SettingsMenu::Impl {
     }
     void gameTab(bool compact) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10, compact ? 5.0f : 7.0f));
-        wrappedHint(gameRunning ? "Продолжите игру или сохраните текущий момент." : "Начните новую игру или загрузите сохранение.");
+        if (gameRunning) {
+            const char* label = "Ввести код";
+            const float submitWidth = ImGui::CalcTextSize(label).x + 2 * ImGui::GetStyle().FramePadding.x;
+            ImGui::SetNextItemWidth(-submitWidth - ImGui::GetStyle().ItemSpacing.x);
+            const bool enter = ImGui::InputTextWithHint("##cheat_code",
+                immortal ? "Неуязвимость включена" : "Чит-код", cheatCode, sizeof cheatCode,
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::SameLine();
+            const bool submit = button(label, ImVec2(submitWidth, 0));
+            if (enter || submit) {
+                std::string code(cheatCode);
+                const auto first = code.find_first_not_of(" \t\r\n");
+                if (first != std::string::npos) {
+                    code = code.substr(first, code.find_last_not_of(" \t\r\n") - first + 1);
+                    if (SDL_strcasecmp(code.c_str(), "immortality") == 0) {
+                        action = MenuAction::EnableImmortality;
+                        cheatCode[0] = 0;
+                    } else message("Неизвестный чит-код.", true);
+                }
+            }
+        } else wrappedHint("Начните новую игру или загрузите сохранение.");
         ImGui::Spacing();
         const float buttonHeight = compact ? 33.0f : 44.0f;
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.86f, 0.64f, 0.13f, 1));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.77f, 0.22f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.56f, 0.38f, 0.16f, 1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.67f, 0.47f, 0.21f, 1));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.75f, 0.53f, 0.08f, 1));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.96f, 0.83f, 1));
         if (focusGameAction) {
@@ -436,7 +519,13 @@ struct SettingsMenu::Impl {
         ImGui::EndDisabled();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.97f, 0.53f, 0.49f, 1));
         if (button("Выйти на рабочий стол", ImVec2(-1, buttonHeight))) action = MenuAction::QuitDesktop;
-        ImGui::PopStyleColor(); ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        if(gameRunning){
+            ImGui::Spacing();
+            ImGui::TextColored(Accent,"Запись тропы %d.%d",presentationHud.world,presentationHud.level);
+            ImGui::TextWrapped("%s",trailStory(presentationHud));
+        }
+        ImGui::PopStyleVar();
     }
     void returnToTitlePopup() {
         if (openReturnConfirmation) { ImGui::OpenPopup("Выйти в меню?"); openReturnConfirmation = false; }
@@ -517,38 +606,93 @@ struct SettingsMenu::Impl {
             ImGui::EndPopup();
         }
     }
-    SDL_Texture* hudCoinTexture() {
-        if (!presentationHud.valid || coinTextureFailed) return nullptr;
-        if (!coinTexture) {
-            coinTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32,
-                SDL_TEXTUREACCESS_STREAMING, CoinArtWidth, CoinArtHeight);
-            if (!coinTexture) { coinTextureFailed = true; return nullptr; }
-            if (!SDL_SetTextureBlendMode(coinTexture, SDL_BLENDMODE_BLEND) ||
-                !SDL_SetTextureScaleMode(coinTexture, SDL_SCALEMODE_LINEAR)) {
-                SDL_DestroyTexture(coinTexture); coinTexture = nullptr;
-                coinTextureFailed = true; return nullptr;
+    SDL_Texture* poster() {
+        const bool chapter=presentationHud.chapterVisible();
+        if(!chapter && !presentationHud.titleVisible())return nullptr;
+        auto& requested=chapter?chapterPosterRequested:posterRequested;
+        auto& texture=chapter?chapterPoster:titlePoster;
+        if (!requested) {
+            requested = true;
+            const auto* bytes=chapter?IskraChapterPoster:IskraTitlePoster;
+            const auto length=chapter?sizeof IskraChapterPoster:sizeof IskraTitlePoster;
+            SDL_IOStream* stream = SDL_IOFromConstMem(bytes,length);
+            SDL_Surface* surface = stream ? SDL_LoadPNG_IO(stream, true) : nullptr;
+            if (surface) {
+                texture = SDL_CreateTextureFromSurface(renderer, surface);
+                SDL_DestroySurface(surface);
+                if (texture) SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR);
             }
         }
-        const unsigned frame = coinFrameIndex(presentationHud.animationFrame);
-        if (frame != coinUploadedFrame) {
-            const auto& rgba = coinAtlas(frame);
-            if (!SDL_UpdateTexture(coinTexture, nullptr, rgba.data(), CoinArtWidth*4)) {
-                SDL_DestroyTexture(coinTexture); coinTexture = nullptr;
-                coinTextureFailed = true; return nullptr;
-            }
-            coinUploadedFrame = frame;
+        return texture;
+    }
+    void drawTitleOptions() {
+        if (!presentationHud.titleVisible() || presentationDest.w <= 0 || presentationDest.h <= 0) return;
+        const auto& io = ImGui::GetIO();
+        const float fx = io.DisplayFramebufferScale.x > 0 ? io.DisplayFramebufferScale.x : 1;
+        const float fy = io.DisplayFramebufferScale.y > 0 ? io.DisplayFramebufferScale.y : 1;
+        const float width = float(std::clamp(presentationHud.nativeWidth,256,512));
+        const float sx = presentationDest.w/(width*fx), sy = presentationDest.h/(240*fy);
+        const float unit = std::min(sx,sy);
+        const float buttonWidth = std::clamp(width*.36f,102.0f,145.0f)*sx;
+        ImGui::SetNextWindowPos({presentationDest.x/fx+width*.07f*sx,presentationDest.y/fy+148*sy},ImGuiCond_Always);
+        ImGui::SetNextWindowSize({buttonWidth,54*sy},ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{0,0});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{0,2*sy});
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{0,0});
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,3*unit);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0);
+        ImGui::Begin("##title_choices", nullptr, ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings|
+                     ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoNav|ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoScrollbar);
+        ImGui::PushFont(nullptr,8.0f*unit);
+        constexpr const char* options[] = {"Начать приключение", "Вдвоём по очереди", "Настройки"};
+        for (int choice=0;choice<3;++choice) {
+            const bool selected=choice==titleChoice;
+            ImGui::PushStyleColor(ImGuiCol_Button, selected?Accent:ImVec4(.11f,.10f,.18f,.91f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,selected?ImVec4(1,.88f,.67f,1):ImVec4(.31f,.23f,.42f,1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.76f,.59f,.39f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,selected?ImVec4(.13f,.10f,.16f,1):ImVec4(.94f,.91f,.98f,1));
+            if (ImGui::Button(options[choice],{buttonWidth,16*sy})) activateTitleChoice(choice);
+            ImGui::PopStyleColor(4);
         }
-        return coinTexture;
+        ImGui::PopFont();
+        ImGui::End();
+        ImGui::PopStyleVar(5);
     }
     void drawHud() {
-        auto* vp = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 12, vp->Pos.y + vp->Size.y - 12), ImGuiCond_Always, ImVec2(1, 1));
-        ImGui::SetNextWindowBgAlpha(0.90f); ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(5, 5));
-        ImGui::Begin("##settings_hud", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+        if (presentationHud.chapterVisible()) return;
+        if (!presentationHud.valid || presentationDest.w <= 0 || presentationDest.h <= 0) return;
+        const auto& io = ImGui::GetIO();
+        const float fx = io.DisplayFramebufferScale.x > 0 ? io.DisplayFramebufferScale.x : 1;
+        const float fy = io.DisplayFramebufferScale.y > 0 ? io.DisplayFramebufferScale.y : 1;
+        const float sx = presentationDest.w/(fx*std::clamp(presentationHud.nativeWidth,256,512));
+        const float sy = presentationDest.h/(fy*240);
+        const SDL_FRect slot = menuButtonRect(presentationHud);
+        const ImVec2 pos{presentationDest.x/fx+slot.x*sx,presentationDest.y/fy+slot.y*sy};
+        const ImVec2 size{slot.w*sx,slot.h*sy};
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, {1,1});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0,0});
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0,0});
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2*std::min(sx,sy));
+        ImGui::Begin("##settings_hud", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav);
+        ImGui::PushFont(nullptr, 8*std::min(sx,sy));
         ImGui::PushStyleColor(ImGuiCol_Text, Accent);
-        if (button("Меню  F1")) open(3);
-        ImGui::PopStyleColor(); ImGui::End(); ImGui::PopStyleVar();
+        const bool title = presentationHud.titleVisible();
+        if (ImGui::Button(title ? "Меню" : "##pause", size)) open(3);
+        if (!title) {
+            const ImVec2 start = ImGui::GetItemRectMin();
+            auto* draw = ImGui::GetWindowDrawList();
+            for (float x : {5.0f,9.0f})
+                draw->AddRectFilled({start.x+x*sx,start.y+4.5f*sy},
+                                    {start.x+(x+2)*sx,start.y+12.5f*sy},ImGui::GetColorU32(Accent));
+        }
+        ImGui::SetItemTooltip("Меню игры · Esc / F1 / Start");
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+        ImGui::End();
+        ImGui::PopStyleVar(4);
     }
     void drawMenu() {
         auto* vp = ImGui::GetMainViewport();
@@ -563,21 +707,21 @@ struct SettingsMenu::Impl {
         const ImVec2 panelMax(panelMin.x + w, panelMin.y + h);
         ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(panelMin.x + 5, panelMin.y + 7),
             ImVec2(panelMax.x + 5, panelMax.y + 7), IM_COL32(0, 0, 0, 100), 9);
-        drawGlassPanel(ImGui::GetBackgroundDrawList(),&backdrop,panelMin,panelMax,22,IM_COL32(16,39,72,150));
+        drawGlassPanel(ImGui::GetBackgroundDrawList(),&backdrop,panelMin,panelMax,22,IM_COL32(25,23,39,218));
         ImGui::Begin("##settings", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
         const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
         ImGui::PushFont(nullptr, compact ? 22.0f : 28.0f); ImGui::TextColored(Accent, "%s", tab == 3 ? "Меню игры" : "Настройки"); ImGui::PopFont();
         ImGui::SameLine(); ImGui::SetCursorPosX(right - 40); if (button("×##close", ImVec2(40, 34))) close();
-        hint(gameRunning ? "MARIO PC  •  Игра на паузе" : "MARIO PC  •  Главное меню"); ImGui::Spacing();
-        const char* tabs[] = {"Игра", "Экран", compact ? "Клавиши" : "Клавиатура", "Геймпад"};
-        const int indices[] = {3, 0, 1, 2};
-        const float tabWidth = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 3) / 4;
+        hint(gameRunning ? "ИСКРА   /   Игра на паузе" : "ИСКРА   /   Хранитель леса"); ImGui::Spacing();
+        const char* tabs[] = {"Игра", "Правила", "Экран", compact ? "Клавиши" : "Клавиатура", compact ? "Пад" : "Геймпад"};
+        const int indices[] = {3, 4, 0, 1, 2};
+        const float tabWidth = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 4) / 5;
         ImGui::BeginDisabled(pending || captureAction >= 0 || returnConfirmation);
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 5; ++i) {
             if (i) ImGui::SameLine(); const bool active = tab == indices[i];
             if (active) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.71f, 0.22f, 0.20f, 1));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.84f, 0.29f, 0.24f, 1));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.40f, 0.26f, 0.54f, 1));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.53f, 0.36f, 0.65f, 1));
             }
             if (button(tabs[i], ImVec2(tabWidth, 0))) { tab = indices[i]; focusGameAction = tab == 3; }
             if (active) ImGui::PopStyleColor(2);
@@ -591,7 +735,7 @@ struct SettingsMenu::Impl {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10, 7));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, compact ? ImVec2(12, 8) : ImVec2(16, 14));
         ImGui::BeginChild("content", ImVec2(0, contentHeight), ImGuiChildFlags_AlwaysUseWindowPadding);
-        if (tab == 0) screenTab(); else if (tab == 1) keyboardTab(); else if (tab == 2) gamepadTab(); else gameTab(compact);
+        if (tab == 0) screenTab(); else if (tab == 1) keyboardTab(); else if (tab == 2) gamepadTab(); else if (tab == 4) rulesTab(); else gameTab(compact);
         ImGui::EndChild(); ImGui::PopStyleVar(3); ImGui::EndDisabled();
         ImGui::BeginChild("status", ImVec2(0, gamePage ? (compact ? 38 : 44) : (compact ? 30 : 32)));
         if (!status.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, statusError ? Warning : Good); ImGui::TextWrapped("%s", status.c_str()); ImGui::PopStyleColor(); }
@@ -608,8 +752,8 @@ struct SettingsMenu::Impl {
             if (button(exitLabel)) action = MenuAction::QuitDesktop; ImGui::PopStyleColor();
             const float applyWidth = compact ? ImGui::GetContentRegionAvail().x : (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.36f;
             if (button("Применить", ImVec2(applyWidth, 0))) apply(false); if (!compact) ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.86f, 0.64f, 0.13f, 1));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.77f, 0.22f, 1));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.56f, 0.38f, 0.16f, 1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.67f, 0.47f, 0.21f, 1));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.75f, 0.53f, 0.08f, 1));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.96f, 0.83f, 1));
             if (button("Сохранить и закрыть", ImVec2(-1, 0))) apply(true);
@@ -640,8 +784,16 @@ struct SettingsMenu::Impl {
         else io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
         ImGui::GetStyle().FontScaleMain = 1.0f;
         ImGui_ImplSDLRenderer3_NewFrame(); ImGui_ImplSDL3_NewFrame(); ImGui::NewFrame();
-        drawPresentationHud(presentationHud, presentationDest, &backdrop, hudCoinTexture());
-        if (isOpen) drawMenu(); else drawHud(); capturePopup(); confirmationPopup(); returnToTitlePopup(); ImGui::Render();
+        SDL_Texture* cover=poster();
+        // Chapter art can cover the entire window, including space outside
+        // the maximum width or integer scaling of the playable viewport.
+        SDL_FRect coverDest=presentationDest;
+        int coverW=0,coverH=0;
+        if(presentationHud.chapterVisible() && SDL_GetRenderOutputSize(renderer,&coverW,&coverH)
+           && coverW>0 && coverH>0)
+            coverDest={0,0,static_cast<float>(coverW),static_cast<float>(coverH)};
+        drawPresentationHud(presentationHud, coverDest, cover != nullptr);
+        if (isOpen) drawMenu(); else { drawTitleOptions(); drawHud(); } capturePopup(); confirmationPopup(); returnToTitlePopup(); ImGui::Render();
         vertices = ImGui::GetDrawData()->TotalVtxCount;
         int logicalW = 0, logicalH = 0; SDL_RendererLogicalPresentation presentation = SDL_LOGICAL_PRESENTATION_DISABLED;
         SDL_GetRenderLogicalPresentation(renderer, &logicalW, &logicalH, &presentation);
@@ -649,6 +801,17 @@ struct SettingsMenu::Impl {
         float sx = 1, sy = 1; SDL_GetRenderScale(renderer, &sx, &sy);
         SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
         SDL_SetRenderViewport(renderer, nullptr); SDL_SetRenderScale(renderer, 1, 1);
+        if (cover && coverDest.w > 0 && coverDest.h > 0) {
+            float imageW, imageH;
+            if (SDL_GetTextureSize(cover, &imageW, &imageH)) {
+                // Crop around the lantern bearer without stretching the cover on narrow screens.
+                const float fit = std::max(coverDest.w / imageW, coverDest.h / imageH);
+                SDL_FRect src{0, 0, coverDest.w / fit, coverDest.h / fit};
+                src.x = (imageW - src.w) * (presentationHud.chapterVisible()?.72f:.82f);
+                src.y = (imageH - src.h) * .50f;
+                SDL_RenderTexture(renderer, cover, &src, &coverDest);
+            }
+        }
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_SetRenderLogicalPresentation(renderer, logicalW, logicalH, presentation);
         SDL_SetRenderViewport(renderer, hasViewport ? &viewport : nullptr); SDL_SetRenderScale(renderer, sx, sy);
@@ -665,15 +828,19 @@ void SettingsMenu::close() { impl_->close(); }
 bool SettingsMenu::visible() const { return impl_->isOpen; }
 bool SettingsMenu::capturing() const { return impl_->captureAction >= 0; }
 bool SettingsMenu::handleEvent(const SDL_Event& event) { return impl_->event(event); }
+void SettingsMenu::filterTitleControls(SMB_buttons& buttons) { impl_->filterTitleControls(buttons); }
+bool SettingsMenu::takeTitleActivity() { return std::exchange(impl_->titleActivity,false); }
+int SettingsMenu::takeTitlePlayers() { return std::exchange(impl_->pendingTitlePlayers,-1); }
 bool SettingsMenu::render() { return impl_->render(); }
 MenuAction SettingsMenu::takeAction() { return std::exchange(impl_->action, MenuAction::None); }
 void SettingsMenu::setSaveAvailable(bool available) { impl_->saveAvailable = available; }
 void SettingsMenu::setGameRunning(bool running) { impl_->gameRunning = running; }
+void SettingsMenu::setImmortal(bool active) { impl_->immortal = active; }
 void SettingsMenu::setPresentationHud(const PresentationHud& data, const SDL_FRect& renderDest) {
     impl_->presentationHud = data; impl_->presentationDest = renderDest;
 }
 void SettingsMenu::setBackdropPixels(const unsigned char* rgb, int width, int height, const SDL_FRect& renderDest, std::uint64_t frame) {
-    impl_->backdrop.update(rgb,width,height,renderDest,frame,impl_->presentationHud.titleVisible());
+    if (impl_->isOpen) impl_->backdrop.update(rgb,width,height,renderDest,frame,impl_->presentationHud.titleVisible());
 }
 void SettingsMenu::notifyGameAction(bool success, const std::string& message) { impl_->message(message, !success); }
 int SettingsMenu::selectedTab() const { return impl_->tab; }

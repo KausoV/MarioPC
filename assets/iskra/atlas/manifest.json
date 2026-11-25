@@ -1,0 +1,138 @@
+{
+  "dataset": "Angais/pixel-art-atlas-1.4m",
+  "source": "https://huggingface.co/datasets/Angais/pixel-art-atlas-1.4m",
+  "revision": "bf78f8c8cbafa6d07718111a94d41e2dd79ddaa7",
+  "license": "CC0-1.0",
+  "license_url": "https://huggingface.co/datasets/Angais/pixel-art-atlas-1.4m/blob/bf78f8c8cbafa6d07718111a94d41e2dd79ddaa7/LICENSE",
+  "layout": "Unmodified 16 x 16 RGBA cells, left to right in sprites order. sha256_rgba is the digest of the original decoded RGBA bytes.",
+  "sprites": [
+    {
+      "sprite": "Fern",
+      "row_id": 338910,
+      "split": "validation",
+      "subject": "fern frond",
+      "caption": "lush fern frond with dew drops",
+      "sha256_rgba": "6b78ec1e289b65b8a6fe254cdadf91298cc95ea36cfaa55c3f56d4a92868798b"
+    },
+    {
+      "sprite": "Bluebell",
+      "row_id": 245154,
+      "split": "validation",
+      "subject": "bluebell",
+      "caption": "blooming bluebell with a curved stem",
+      "sha256_rgba": "81d10e23851b1bf13ba60a3df36b58d9b39669b8e981874294d5bc9be4f9e043"
+    },
+    {
+      "sprite": "Mushroom",
+      "row_id": 232583,
+      "split": "validation",
+      "subject": "mushroom cluster",
+      "caption": "mushroom cluster on a patch of moss",
+      "sha256_rgba": "6090c490929117998c10d7fabbb39af7155edabf680ea9148202cecd7a38d65e"
+    },
+    {
+      "sprite": "Wildflower",
+      "row_id": 120999,
+      "split": "validation",
+      "subject": "snowdrop flower",
+      "caption": "glowing snowdrop flower with a small butterfly",
+      "sha256_rgba": "24c9995d2f775fd50d79be68edbc5c697e5f7ebda6c86592d6f27701adfce1c8"
+    },
+    {
+      "sprite": "Crystal",
+      "row_id": 218020,
+      "split": "validation",
+      "subject": "crystal cluster",
+      "caption": "shimmering crystal cluster",
+      "sha256_rgba": "55c358a1865f951b8f9cc062d7675096cc79dbb53d63fd4e83ba0fc3b9c54f0e"
+    },
+    {
+      "sprite": "Geode",
+      "row_id": 125908,
+      "split": "validation",
+      "subject": "crystal geode",
+      "caption": "glowing crystal geode",
+      "sha256_rgba": "a92ddf82f538e756664ac3a515c5dbae21cd8956cd74c2416c124bb946588806"
+    },
+    {
+      "sprite": "Stone",
+      "row_id": 158748,
+      "split": "validation",
+      "subject": "rock cluster",
+      "caption": "mossy slate rock cluster",
+      "sha256_rgba": "0135e845c4670d9f642d579e5e6400eaa5ddbe30dcc0f8df1796b923a42c0359"
+    },
+    {
+      "sprite": "Fossil",
+      "row_id": 225039,
+      "split": "validation",
+      "subject": "trilobite fossil",
+      "caption": "glowing trilobite fossil embedded in stone",
+      "sha256_rgba": "4c444ceba840107ad72b1ff8a82999ccacc5293bace84cf7279d74b4bc8e3668"
+    },
+    {
+      "sprite": "Coral",
+      "row_id": 1025234,
+      "split": "train",
+      "subject": "staghorn coral",
+      "caption": "staghorn coral",
+      "sha256_rgba": "cc49b33a49901279412e1cfba466dbdfe99582e9e8696c12249eb1f8473bb698"
+    },
+    {
+      "sprite": "Seaweed",
+      "row_id": 143212,
+      "split": "validation",
+      "subject": "sea grass tuft",
+      "caption": "sea grass tuft with tiny bubbles",
+      "sha256_rgba": "9738477faa2541d30101f2fa74ce0213c466d13439eee982d34f1fd1f533c358"
+    },
+    {
+      "sprite": "Shell",
+      "row_id": 309091,
+      "split": "validation",
+      "subject": "spiral shell",
+      "caption": "glowing spiral shell with water droplets",
+      "sha256_rgba": "6a8cd424e8a082facc8857edf157ea7c2833fe736db60f264311863356d97d96"
+    },
+    {
+      "sprite": "Sponge",
+      "row_id": 754291,
+      "split": "train",
+      "subject": "tube sponge",
+      "caption": "tube sponge",
+      "sha256_rgba": "4c7b151141397916b8ea59eff95b6270cd931511b62960834d69f8d3d98672e1"
+    },
+    {
+      "sprite": "Lantern",
+      "row_id": 292550,
+      "split": "validation",
+      "subject": "ship lantern",
+      "caption": "old ship lantern with seaweed draped on it",
+      "sha256_rgba": "306a4f73190b8380179678351b26c6eb70eca0f740b3242e5fc60240bb0b744f"
+    },
+    {
+      "sprite": "Urn",
+      "row_id": 385298,
+      "split": "validation",
+      "subject": "urn",
+      "caption": "jade urn with a blue floral pattern",
+      "sha256_rgba": "d92adf63a816657b745bc9bdc8d5c69844131bb8269f1da98a5074458a51e42b"
+    },
+    {
+      "sprite": "Relic",
+      "row_id": 149573,
+      "split": "validation",
+      "subject": "sigil stone",
+      "caption": "weathered slate sigil stone",
+      "sha256_rgba": "c7b52e767f06ab080b0265b0923d44dc71391ce5fb695aa79b69986aea881870"
+    },
+    {
+      "sprite": "Moss",
+      "row_id": 147587,
+      "split": "train",
+      "subject": "moss patch",
+      "caption": "moss patch",
+      "sha256_rgba": "2dcf00c5e3c8f1b513b6731156fbbedbe6e333f0b23ea19e71eed9d45bf5ff65"
+    }
+  ]
+}
